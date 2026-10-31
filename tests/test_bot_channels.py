@@ -4,7 +4,8 @@ from datetime import datetime, timezone
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
-from scout.bot import MENU_ACTIONS, bot_commands, create_router, health_text, main_menu, parse_channel_list
+from scout.bot import (MENU_ACTIONS, bot_commands, candidate_digest_keyboard, create_router,
+                       health_text, main_menu, parse_channel_list)
 from scout.service import ScoutService
 
 
@@ -45,6 +46,26 @@ async def test_manual_search_menu_button_starts_discovery_and_reports_result(rep
     service.discover.assert_awaited_once_with()
     assert "Запускаю поиск" in message.answer.await_args_list[0].args[0]
     assert "Новых чатов на рассмотрение: 2" in message.answer.await_args_list[-1].args[0]
+
+
+@pytest.mark.asyncio
+async def test_digest_decision_removes_only_its_buttons(repo):
+    first = repo.candidate(101, "jobs00001", "First", "", "query", 50, "IT", ["Нужен сайт"])
+    second = repo.candidate(102, "jobs00002", "Second", "", "query", 50, "IT", ["Нужен бот"])
+    source = SimpleNamespace(latest_message_id=AsyncMock(return_value=9))
+    service = SimpleNamespace(owner_id=1, repo=repo, source=source)
+    callback_handler = create_router(service).callback_query.handlers[0].callback
+    message = SimpleNamespace(text="Новые чаты на рассмотрение:",
+                              reply_markup=candidate_digest_keyboard([first.id, second.id]),
+                              edit_reply_markup=AsyncMock())
+    callback = SimpleNamespace(data=f"channel:approved:{first.id}", message=message, answer=AsyncMock())
+
+    await callback_handler(callback)
+
+    assert repo.get_channel(first.id).status == "approved"
+    markup = message.edit_reply_markup.await_args.kwargs["reply_markup"]
+    assert len(markup.inline_keyboard) == 1
+    assert markup.inline_keyboard[0][0].callback_data == f"channel:approved:{second.id}"
 
 
 @pytest.mark.asyncio

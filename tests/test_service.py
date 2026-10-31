@@ -422,3 +422,43 @@ async def test_discovery_deduplicates_reposted_orders_across_chats(repo):
     await service.discover()
     assert len(repo.list_channels("pending")) == 1
     bot.send_message.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_discovery_sends_five_chat_digest_and_remaining_one(repo):
+    class SixChatSource(FakeSource):
+        def __init__(self):
+            self.searches = 0
+
+        async def post_search_quota(self, query):
+            return SimpleNamespace(remains=1 if self.searches == 0 else 0, query_is_free=False,
+                                   wait_till=int(datetime.now(timezone.utc).timestamp()) + 3600)
+
+        async def search_public_posts(self, query):
+            return []
+
+        async def search_public_chats(self, query, limit=30):
+            self.searches += 1
+            return [SimpleNamespace(id=i, username=f"jobs{i:05}", title=f"Chat {i}") for i in range(1, 7)]
+
+        async def inspect(self, entity, max_age_days=30):
+            orders = {
+                1: "Нужен Python разработчик для API платежей, бюджет 15000 рублей",
+                2: "Нужна верстка интернет магазина на React, оплата 25000 рублей",
+                3: "Ищем исполнителя для разработки Telegram бота с оплатой через Юкассу",
+                4: "Нужна автоматизация отчётов в CRM, бюджет обсуждается",
+                5: "Требуется разработать мобильное приложение для доставки еды",
+                6: "Заказ на парсинг каталога товаров, оплата по договорённости",
+            }
+            return [orders[entity.id]], True, 0.0
+
+    ai = SimpleNamespace(ask=AsyncMock(return_value={"suitable": True}))
+    bot = SimpleNamespace(send_message=AsyncMock(return_value=SimpleNamespace(message_id=1)))
+    service = ScoutService(repo, SixChatSource(), ai, bot, 1)
+    assert (await service.discover())[:3] == ("wait", 6, 0)
+    assert bot.send_message.await_count == 2
+    first, second = [call.args[1] for call in bot.send_message.await_args_list]
+    assert first.count("https://t.me/") == 5
+    assert second.count("https://t.me/") == 1
+    assert "Пример:" in first
+    assert all(repo.get_candidate(channel.id).owner_notified for channel in repo.list_channels("pending"))

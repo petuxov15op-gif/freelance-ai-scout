@@ -101,20 +101,38 @@ class ScoutService:
         await self.bot.send_message(self.owner_id, text[:4000], reply_markup=candidate_keyboard(channel.id))
         self.repo.mark_candidate_notified(channel.id)
 
+    async def notify_candidate_batch(self, channels: list[Channel]) -> None:
+        from .bot import candidate_digest_keyboard
+        entries = [(channel, self.repo.get_candidate(channel.id)) for channel in channels]
+        entries = [(channel, candidate) for channel, candidate in entries
+                   if candidate and not candidate.owner_notified]
+        if not entries:
+            return
+        lines = ["Новые чаты на рассмотрение:"]
+        for number, (channel, candidate) in enumerate(entries, 1):
+            example = " ".join(candidate.examples[0].split())[:220] if candidate.examples else "Пример не найден"
+            lines.append(f"\n{number}. {channel.title[:90]} · {candidate.usefulness}/100\n"
+                         f"https://t.me/{channel.username}\n"
+                         f"Почему: {candidate.reason[:160]}\nПример: {example}")
+        await self.bot.send_message(self.owner_id, "\n".join(lines)[:4000],
+                                    reply_markup=candidate_digest_keyboard([channel.id for channel, _ in entries]))
+        for channel, _ in entries:
+            self.repo.mark_candidate_notified(channel.id)
+
     async def discover(self) -> tuple[str, int, int, datetime | None]:
         if self.discovery_lock.locked():
             return "running", 0, 0, None
         async with self.discovery_lock:
             now = datetime.now(timezone.utc)
-            retry = self.repo.setting("discovery_retry_at")
-            if retry and datetime.fromisoformat(retry) > now:
-                return "wait", 0, 0, datetime.fromisoformat(retry)
             channels = [channel for status in ("approved", "pending", "rejected", "blocked")
                         for channel in self.repo.list_channels(status)]
             known = {channel.telegram_id for channel in channels}
             seen_examples: list[str] = []
+            batch: list[Channel] = []
             for channel in channels:
                 candidate = self.repo.get_candidate(channel.id)
+                if channel.status == "pending" and candidate and candidate.query and not candidate.owner_notified:
+                    batch.append(channel)
                 if not candidate or not candidate.query or not candidate.examples:
                     continue
                 discovered_at = candidate.discovered_at
@@ -124,6 +142,27 @@ class ScoutService:
                     seen_examples.append(candidate.examples[0])
             suggested = 0
             errors = 0
+
+            async def flush_batch(all_items: bool = False) -> None:
+                nonlocal errors
+                while len(batch) >= 5 or (all_items and batch):
+                    part = batch[:5]
+                    try:
+                        await self.notify_candidate_batch(part)
+                    except Exception:
+                        errors += 1
+                        log.exception("Не удалось отправить подборку чатов")
+                        break
+                    del batch[:5]
+
+            async def finish(status: str, retry_at: datetime | None):
+                await flush_batch(all_items=True)
+                return status, suggested, errors, retry_at
+
+            await flush_batch()
+            retry = self.repo.setting("discovery_retry_at")
+            if retry and datetime.fromisoformat(retry) > now:
+                return await finish("wait", datetime.fromisoformat(retry))
             start = int(self.repo.setting("discovery_query_index", "0"))
             for offset in range(len(DISCOVERY_QUERIES)):
                 index = (start + offset) % len(DISCOVERY_QUERIES)
@@ -135,7 +174,7 @@ class ScoutService:
                                       else datetime.now(timezone.utc) + timedelta(hours=1))
                         self.repo.set_setting("discovery_retry_at", wait_until.isoformat())
                         log.info("Бесплатный поиск Telegram исчерпан; повтор после %s", wait_until.isoformat())
-                        return "wait", suggested, errors, wait_until
+                        return await finish("wait", wait_until)
                     found = await self.source.search_public_posts(query)
                     try:
                         chats = await self.source.search_public_chats(query, limit=30)
@@ -150,7 +189,7 @@ class ScoutService:
                     wait_until = datetime.now(timezone.utc) + timedelta(seconds=max(exc.seconds, 60))
                     self.repo.set_setting("discovery_retry_at", wait_until.isoformat())
                     log.warning("Telegram ограничил поиск на %s секунд", exc.seconds)
-                    return "wait", suggested, errors, wait_until
+                    return await finish("wait", wait_until)
                 except Exception:
                     errors += 1
                     log.exception("Поиск публикаций по запросу %s не удался", query)
@@ -187,19 +226,20 @@ class ScoutService:
                             f"Недавние IT-заказы: {len(verified)}; чат активен за последние 3 дня", verified,
                         )
                         if channel:
-                            await self.notify_candidate(channel)
+                            batch.append(channel)
+                            await flush_batch()
                             seen_examples.append(verified[0])
                             suggested += 1
                     except FloodWaitError as exc:
                         wait_until = datetime.now(timezone.utc) + timedelta(seconds=max(exc.seconds, 60))
                         self.repo.set_setting("discovery_retry_at", wait_until.isoformat())
                         log.warning("Telegram ограничил проверку чатов на %s секунд", exc.seconds)
-                        return "wait", suggested, errors, wait_until
+                        return await finish("wait", wait_until)
                     except Exception:
                         errors += 1
                         log.exception("Проверка найденного чата @%s не удалась", entity.username)
             # If all distinct queries were free/cached, check again later for new posts.
-            return "done", suggested, errors, datetime.now(timezone.utc) + timedelta(hours=1)
+            return await finish("done", datetime.now(timezone.utc) + timedelta(hours=1))
 
     async def monitor(self) -> None:
         if self.monitor_lock.locked():

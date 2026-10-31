@@ -67,6 +67,14 @@ def candidate_keyboard(channel_id: int) -> InlineKeyboardMarkup:
     ])
 
 
+def candidate_digest_keyboard(channel_ids: list[int]) -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text=f"{number} Добавить", callback_data=f"channel:approved:{channel_id}"),
+         InlineKeyboardButton(text=f"{number} Отклонить", callback_data=f"channel:rejected:{channel_id}")]
+        for number, channel_id in enumerate(channel_ids, 1)
+    ])
+
+
 def job_keyboard(job_id: int, link: str | None, status: str = "new", editing: bool = False) -> InlineKeyboardMarkup:
     rows = []
     if link:
@@ -330,6 +338,13 @@ def create_router(service) -> Router:
                         return
                     initial_cursor = await service.source.latest_message_id(channel)
                 changed = repo.transition_channel(channel_id, parts[1], initial_cursor)
+                if changed and (getattr(callback.message, "text", "") or "").startswith("Новые чаты на рассмотрение"):
+                    rows = [row for row in callback.message.reply_markup.inline_keyboard
+                            if not any(button.callback_data == f"channel:{parts[1]}:{channel_id}" or
+                                       button.callback_data == f"channel:{'rejected' if parts[1] == 'approved' else 'approved'}:{channel_id}"
+                                       for button in row)]
+                    await callback.message.edit_reply_markup(
+                        reply_markup=InlineKeyboardMarkup(inline_keyboard=rows) if rows else None)
                 await callback.answer("Статус обновлён" if changed else "Канал уже обработан", show_alert=not changed)
                 return
             if len(parts) == 2 and parts[0] == "examples":
