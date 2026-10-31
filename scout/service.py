@@ -8,7 +8,7 @@ from datetime import datetime, timedelta, timezone
 from aiogram import Bot
 from telethon.errors import FloodWaitError
 
-from .core import explicit_ai_coding, explicit_it_task, likely_job, ongoing_role, potential_job
+from .core import explicit_ai_coding, explicit_it_task, likely_job, ongoing_role, potential_job, similar
 from .models import Channel
 from .repository import Repository
 
@@ -109,8 +109,19 @@ class ScoutService:
             retry = self.repo.setting("discovery_retry_at")
             if retry and datetime.fromisoformat(retry) > now:
                 return "wait", 0, 0, datetime.fromisoformat(retry)
-            known = {channel.telegram_id for status in ("approved", "pending", "rejected", "blocked")
-                     for channel in self.repo.list_channels(status)}
+            channels = [channel for status in ("approved", "pending", "rejected", "blocked")
+                        for channel in self.repo.list_channels(status)]
+            known = {channel.telegram_id for channel in channels}
+            seen_examples: list[str] = []
+            for channel in channels:
+                candidate = self.repo.get_candidate(channel.id)
+                if not candidate or not candidate.query or not candidate.examples:
+                    continue
+                discovered_at = candidate.discovered_at
+                if discovered_at.tzinfo is None:
+                    discovered_at = discovered_at.replace(tzinfo=timezone.utc)
+                if discovered_at >= now - timedelta(days=3):
+                    seen_examples.append(candidate.examples[0])
             suggested = 0
             errors = 0
             start = int(self.repo.setting("discovery_query_index", "0"))
@@ -151,6 +162,8 @@ class ScoutService:
                     if post and (post.date < datetime.now(timezone.utc) - timedelta(days=3)
                                  or not likely_job(content) or not DEVELOPMENT_TASK.search(content)):
                         continue
+                    if post and any(similar(content, prior) for prior in seen_examples):
+                        continue
                     known.add(entity.id)
                     try:
                         examples, active, ad_ratio = await self.source.inspect(entity, max_age_days=3)
@@ -158,10 +171,13 @@ class ScoutService:
                             continue
                         examples = [text for text in dict.fromkeys([content, *examples])
                                     if likely_job(text) and DEVELOPMENT_TASK.search(text)]
+                        if examples and any(similar(examples[0], prior) for prior in seen_examples):
+                            continue
                         verified = []
                         for example in examples[:3]:
                             if (await self.ai.ask("candidate", example))["suitable"]:
                                 verified.append(example)
+                                break
                         if not verified:
                             continue
                         description = await self.source.description(entity)
@@ -172,6 +188,7 @@ class ScoutService:
                         )
                         if channel:
                             await self.notify_candidate(channel)
+                            seen_examples.append(verified[0])
                             suggested += 1
                     except FloodWaitError as exc:
                         wait_until = datetime.now(timezone.utc) + timedelta(seconds=max(exc.seconds, 60))

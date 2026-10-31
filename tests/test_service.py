@@ -396,3 +396,29 @@ async def test_discovery_obeys_flood_wait(repo):
     assert (status, found, errors) == ("wait", 0, 0)
     assert retry >= datetime.now(timezone.utc) + timedelta(seconds=110)
     assert (await service.discover())[0] == "wait"
+
+
+@pytest.mark.asyncio
+async def test_discovery_deduplicates_reposted_orders_across_chats(repo):
+    order = "Нужен разработчик Python для интеграции API, оплата по договорённости"
+
+    class RepostSource(FakeSource):
+        async def post_search_quota(self, query):
+            return SimpleNamespace(remains=0, query_is_free=True, wait_till=None)
+
+        async def search_public_posts(self, query):
+            return [(SimpleNamespace(id=i, username=f"jobs{i:05}", title=f"Chat {i}"),
+                     SimpleNamespace(raw_text=order, date=datetime.now(timezone.utc))) for i in (1, 2)]
+
+        async def search_public_chats(self, query, limit=30):
+            return []
+
+        async def inspect(self, entity, max_age_days=30):
+            return [order], True, 0.0
+
+    ai = SimpleNamespace(ask=AsyncMock(return_value={"suitable": True}))
+    bot = SimpleNamespace(send_message=AsyncMock(return_value=SimpleNamespace(message_id=1)))
+    service = ScoutService(repo, RepostSource(), ai, bot, 1)
+    await service.discover()
+    assert len(repo.list_channels("pending")) == 1
+    bot.send_message.assert_awaited_once()
