@@ -42,29 +42,37 @@ class TelegramSource:
         # session already knows the channel and Telegram has limited lookups.
         peer = await self.client.get_input_entity(username)
         entity = await self.client.get_entity(peer)
-        if not isinstance(entity, types.Channel) or not entity.username or getattr(entity, "megagroup", False):
-            raise ValueError("Доступен только публичный Telegram-канал")
+        if not isinstance(entity, types.Channel) or not entity.username:
+            raise ValueError("Доступен только публичный Telegram-канал или чат")
         return entity
+
+    async def search_public_chats(self, query: str, limit: int = 30):
+        result = await self.client(functions.contacts.SearchRequest(q=query, limit=limit))
+        return [chat for chat in result.chats
+                if isinstance(chat, types.Channel) and chat.username]
 
     async def examples(self, entity, limit: int = 12) -> list[str]:
         examples, _, _ = await self.inspect(entity, limit)
         return examples
 
-    async def inspect(self, entity, limit: int = 20) -> tuple[list[str], bool, float]:
+    async def inspect(self, entity, limit: int = 20, max_age_days: int = 30) -> tuple[list[str], bool, float]:
         result = []
         latest = None
         advertising = 0
         total = 0
+        cutoff = datetime.now(timezone.utc) - timedelta(days=max_age_days)
         async for message in self.client.iter_messages(entity, limit=limit):
-            total += 1
             if latest is None:
                 latest = message.date
+            if message.date < cutoff:
+                break
+            total += 1
             content = (message.raw_text or "").lower()
             if any(token in content for token in ("реклама", "рекламный пост", "подписывайтесь", "advertisement", "sponsored")):
                 advertising += 1
             if message.raw_text and likely_job(message.raw_text) and not any(similar(message.raw_text, prior) for prior in result):
                 result.append(message.raw_text[:800])
-        active = bool(latest and latest >= datetime.now(timezone.utc) - timedelta(days=30))
+        active = bool(latest and latest >= cutoff)
         return result[:3], active, advertising / total if total else 0.0
 
     async def description(self, entity) -> str | None:

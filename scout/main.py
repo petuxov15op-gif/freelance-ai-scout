@@ -40,6 +40,7 @@ async def run() -> None:
     dispatcher.include_router(create_router(service))
     scheduler = AsyncIOScheduler(timezone=ZoneInfo("Asia/Yekaterinburg"))
     scheduler.add_job(service.monitor, "interval", minutes=10, id="monitor", max_instances=1, coalesce=True)
+    scheduler.add_job(service.discover, "cron", hour=12, minute=0, id="discover", max_instances=1, coalesce=True)
     initial_monitor = None
     try:
         await source.start()
@@ -49,7 +50,7 @@ async def run() -> None:
         except Exception:
             logging.exception("Не удалось обновить меню бота")
         scheduler.start()
-        logging.info("Мониторинг одобренных каналов запланирован каждые 10 минут; поиск каналов выключен")
+        logging.info("Мониторинг каждые 10 минут; поиск новых чатов ежедневно в 12:00 по Екатеринбургу")
         initial_monitor = asyncio.create_task(service.monitor())
         await dispatcher.start_polling(bot, handle_signals=True)
     finally:

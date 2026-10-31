@@ -2,11 +2,13 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import re
 from datetime import datetime, timezone
+from zoneinfo import ZoneInfo
 
 from aiogram import Bot
 
-from .core import explicit_ai_coding, explicit_it_task, ongoing_role, potential_job
+from .core import explicit_ai_coding, explicit_it_task, likely_job, ongoing_role, potential_job
 from .models import Channel
 from .repository import Repository
 
@@ -18,6 +20,13 @@ JOB_STATUS_LABELS = {
     "applied": "📨 Откликнулся",
     "won": "🏆 Получил заказ",
 }
+
+DISCOVERY_QUERIES = ("заказы разработка", "заказы программистам", "фриланс разработка")
+DEVELOPMENT_TASK = re.compile(
+    r"\b(?:разработ|программ|сайт|лендинг|верстк|бот\b|автоматизац|интеграц|парсинг|"
+    r"скрипт|приложен|crm\b|api\b|python\b|frontend\b|backend\b|wordpress\b|tilda\b)",
+    re.IGNORECASE,
+)
 
 
 def job_text(job, analysis, link: str | None) -> str:
@@ -36,6 +45,7 @@ class ScoutService:
     def __init__(self, repo: Repository, source, ai, bot: Bot, owner_id: int):
         self.repo, self.source, self.ai, self.bot, self.owner_id = repo, source, ai, bot, owner_id
         self.monitor_lock = asyncio.Lock()
+        self.discovery_lock = asyncio.Lock()
         self.last_monitor_started: datetime | None = None
         self.last_monitor_finished: datetime | None = None
         self.last_monitor_errors: list[str] = []
@@ -78,11 +88,56 @@ class ScoutService:
         if not candidate or candidate.owner_notified:
             return
         examples = "\n".join("• " + x[:180] for x in candidate.examples[:2]) or "Нет подходящих примеров"
-        text = (f"Новый канал: {channel.title}\n@{channel.username} · https://t.me/{channel.username}\n"
+        text = (f"Новый чат/канал: {channel.title}\n@{channel.username} · https://t.me/{channel.username}\n"
                 f"Описание: {channel.description or 'не указано'}\n"
                 f"Полезность: {candidate.usefulness}/100\n{candidate.reason}\nПримеры публикаций:\n{examples}")
         await self.bot.send_message(self.owner_id, text[:4000], reply_markup=candidate_keyboard(channel.id))
         self.repo.mark_candidate_notified(channel.id)
+
+    async def discover(self) -> None:
+        if self.discovery_lock.locked():
+            return
+        async with self.discovery_lock:
+            today = datetime.now(ZoneInfo("Asia/Yekaterinburg")).date().isoformat()
+            if self.repo.setting("last_discovery_date") == today:
+                return
+            # Reserve this day's run before Telegram requests, including across restarts.
+            self.repo.set_setting("last_discovery_date", today)
+            known = {channel.telegram_id for status in ("approved", "pending", "rejected", "blocked")
+                     for channel in self.repo.list_channels(status)}
+            for query in DISCOVERY_QUERIES:
+                reviewed_in_query = 0
+                try:
+                    found = await self.source.search_public_chats(query, limit=30)
+                except Exception:
+                    log.exception("Поиск чатов по запросу %s не удался", query)
+                    continue
+                for entity in found:
+                    if entity.id in known or reviewed_in_query >= 4:
+                        continue
+                    known.add(entity.id)
+                    reviewed_in_query += 1
+                    try:
+                        examples, active, ad_ratio = await self.source.inspect(entity, max_age_days=3)
+                        if not active or ad_ratio > .5:
+                            continue
+                        examples = [text for text in examples if likely_job(text) and DEVELOPMENT_TASK.search(text)]
+                        verified = []
+                        for example in examples[:3]:
+                            if (await self.ai.ask("candidate", example))["suitable"]:
+                                verified.append(example)
+                        if not verified:
+                            continue
+                        description = await self.source.description(entity)
+                        channel = self.repo.candidate(
+                            entity.id, entity.username, entity.title, description, query,
+                            min(100, len(verified) * 30 + 20),
+                            f"Недавние IT-заказы: {len(verified)}; чат активен за последние 3 дня", verified,
+                        )
+                        if channel:
+                            await self.notify_candidate(channel)
+                    except Exception:
+                        log.exception("Проверка найденного чата @%s не удалась", entity.username)
 
     async def monitor(self) -> None:
         if self.monitor_lock.locked():

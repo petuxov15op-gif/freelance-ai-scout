@@ -8,11 +8,12 @@ A personal Telegram bot that monitors owner-approved channels for relevant freel
 
 - Adds a public Telegram channel only after the owner confirms it in the bot's menu.
 - Checks approved channels every 10 minutes and stores progress in SQLite so posts can be processed across restarts.
+- Searches public Telegram chats and channels once daily at 12:00 Yekaterinburg time, screens recent software requests and activity within three days, then sends candidates for owner approval. It does not use paid global post search.
 - Filters out unrelated remote jobs and posts without a concrete software task. One-off software projects do not need to mention AI. Ongoing roles must explicitly involve AI-assisted development.
 - Uses OpenRouter for structured analysis of candidate posts and delivers every qualifying opportunity without a score threshold.
 - Groups exact and similar reposts, supports feedback, and prepares reply drafts for the owner's review.
 
-The bot does not discover channels automatically, run global Telegram searches, join channels on its own, or send applications to clients.
+The bot does not join channels on its own or send applications to clients.
 
 ## Stack
 

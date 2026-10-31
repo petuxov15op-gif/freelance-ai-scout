@@ -1,4 +1,6 @@
 from unittest.mock import AsyncMock
+from datetime import datetime, timedelta, timezone
+from types import SimpleNamespace
 
 import pytest
 from telethon import types
@@ -37,3 +39,19 @@ async def test_resolve_uses_cached_peer_instead_of_resolving_username_again(tmp_
     assert await source.resolve("job_for_bots") is channel
     source.client.get_input_entity.assert_awaited_once_with("job_for_bots")
     source.client.get_entity.assert_awaited_once_with(peer)
+
+
+@pytest.mark.asyncio
+async def test_inspect_rejects_stale_chat_and_old_examples(tmp_path):
+    source = TelegramSource(12345, "fake-hash", str(tmp_path / "session"))
+    now = datetime.now(timezone.utc)
+
+    class Client:
+        async def iter_messages(self, entity, limit):
+            yield SimpleNamespace(date=now - timedelta(days=4), raw_text="Нужен сайт, оплата")
+
+    source.client = Client()
+    examples, active, ad_ratio = await source.inspect(object(), max_age_days=3)
+    assert examples == []
+    assert active is False
+    assert ad_ratio == 0

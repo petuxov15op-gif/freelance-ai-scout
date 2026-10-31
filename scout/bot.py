@@ -197,7 +197,7 @@ def create_router(service) -> Router:
         stats = repo.stats()
         telegram_status = "подключён" if service.source.client.is_connected() else "отключён"
         await message.answer(f"Источники: {stats['approved']} · кандидаты: {stats['pending']}\n"
-                             "Поиск каналов и публикаций: выключен\nМониторинг: каждые 10 минут\n"
+                             "Поиск новых чатов: ежедневно в 12:00 (Екб)\nМониторинг: каждые 10 минут\n"
                              "Присылаю: разовые IT-заказы и IT-работу/подработку с явным вайбкодингом\n"
                              "Уведомления: без порога рейтинга\n"
                              f"OpenRouter: {service.ai.last_status}, модель {service.ai.model}, учтено сегодня ${repo.cost_today():.4f}\n"

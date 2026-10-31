@@ -312,3 +312,40 @@ async def test_manual_channel_can_be_reviewed_when_ai_finds_no_fit(repo):
     candidate = repo.get_candidate(channel.id)
     assert candidate.usefulness == 10
     assert "0 из 1" in candidate.reason
+
+
+@pytest.mark.asyncio
+async def test_discovery_only_suggests_recent_development_chats_once_daily(repo):
+    class DiscoverySource(FakeSource):
+        def __init__(self):
+            self.searches = []
+
+        async def search_public_chats(self, query, limit=30):
+            assert limit == 30
+            self.searches.append(query)
+            return [SimpleNamespace(id=i, username=f"jobs{i:05}", title=f"Chat {i}") for i in range(1, 5)]
+
+        async def inspect(self, entity, max_age_days=30):
+            assert max_age_days == 3
+            examples = {
+                1: "Нужен разработчик Python для интеграции API, оплата по договорённости",
+                2: "Нужен дизайнер для оформления логотипа, оплата 5000 рублей",
+                3: "Требуется менеджер по продажам на удалёнку, оплата по договорённости",
+                4: "Нужен разработчик бота на Python, оплата по договорённости",
+            }
+            return [examples[entity.id]], entity.id != 4, 0.0
+
+    class DiscoveryAI(FakeAI):
+        async def ask(self, kind, text):
+            assert kind == "candidate"
+            return {"suitable": True, "reason": "IT-заказ"}
+
+    source = DiscoverySource()
+    bot = SimpleNamespace(send_message=AsyncMock(return_value=SimpleNamespace(message_id=1)))
+    service = ScoutService(repo, source, DiscoveryAI(), bot, 1)
+    await service.discover()
+    assert len(source.searches) == 3
+    assert [channel.username for channel in repo.list_channels("pending")] == ["jobs00001"]
+    bot.send_message.assert_awaited_once()
+    await service.discover()
+    assert len(source.searches) == 3
