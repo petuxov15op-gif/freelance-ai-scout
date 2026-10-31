@@ -1,11 +1,12 @@
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
 import pytest
+from telethon.errors import FloodWaitError
 
 from scout.bot import create_router, job_keyboard
-from scout.service import ScoutService
+from scout.service import DISCOVERY_QUERIES, ScoutService
 
 
 class FakeSource:
@@ -315,10 +316,16 @@ async def test_manual_channel_can_be_reviewed_when_ai_finds_no_fit(repo):
 
 
 @pytest.mark.asyncio
-async def test_discovery_only_suggests_recent_development_chats_once_daily(repo):
+async def test_discovery_suggests_recent_development_chats_across_queries(repo):
     class DiscoverySource(FakeSource):
         def __init__(self):
             self.searches = []
+
+        async def post_search_quota(self, query):
+            return SimpleNamespace(remains=10, query_is_free=False, wait_till=None)
+
+        async def search_public_posts(self, query):
+            return []
 
         async def search_public_chats(self, query, limit=30):
             assert limit == 30
@@ -343,19 +350,26 @@ async def test_discovery_only_suggests_recent_development_chats_once_daily(repo)
     source = DiscoverySource()
     bot = SimpleNamespace(send_message=AsyncMock(return_value=SimpleNamespace(message_id=1)))
     service = ScoutService(repo, source, DiscoveryAI(), bot, 1)
-    await service.discover()
-    assert len(source.searches) == 3
+    status, found, errors, retry = await service.discover()
+    assert (status, found, errors) == ("done", 1, 0)
+    assert retry is not None
+    assert len(source.searches) == len(DISCOVERY_QUERIES)
     assert [channel.username for channel in repo.list_channels("pending")] == ["jobs00001"]
     bot.send_message.assert_awaited_once()
-    await service.discover()
-    assert len(source.searches) == 3
 
 
 @pytest.mark.asyncio
-async def test_manual_discovery_does_not_skip_next_scheduled_run(repo):
+async def test_discovery_waits_for_telegrams_quota_reset(repo):
     class DiscoverySource(FakeSource):
         def __init__(self):
             self.searches = 0
+
+        async def post_search_quota(self, query):
+            return SimpleNamespace(remains=1 if self.searches == 0 else 0,
+                                   query_is_free=False, wait_till=int(datetime.now(timezone.utc).timestamp()) + 3600)
+
+        async def search_public_posts(self, query):
+            return []
 
         async def search_public_chats(self, query, limit=30):
             self.searches += 1
@@ -363,7 +377,22 @@ async def test_manual_discovery_does_not_skip_next_scheduled_run(repo):
 
     source = DiscoverySource()
     service = ScoutService(repo, source, FakeAI(), SimpleNamespace(), 1)
-    assert await service.discover(manual=True) == ("done", 0, 0)
-    assert await service.discover(manual=True) == ("already", 0, 0)
-    assert await service.discover() == ("done", 0, 0)
-    assert source.searches == 6
+    status, found, errors, retry = await service.discover()
+    assert (status, found, errors) == ("wait", 0, 0)
+    assert retry > datetime.now(timezone.utc)
+    assert source.searches == 1
+    assert (await service.discover())[0] == "wait"
+    assert source.searches == 1
+
+
+@pytest.mark.asyncio
+async def test_discovery_obeys_flood_wait(repo):
+    class FloodedSource(FakeSource):
+        async def post_search_quota(self, query):
+            raise FloodWaitError(None, capture=120)
+
+    service = ScoutService(repo, FloodedSource(), FakeAI(), SimpleNamespace(), 1)
+    status, found, errors, retry = await service.discover()
+    assert (status, found, errors) == ("wait", 0, 0)
+    assert retry >= datetime.now(timezone.utc) + timedelta(seconds=110)
+    assert (await service.discover())[0] == "wait"

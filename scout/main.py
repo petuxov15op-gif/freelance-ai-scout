@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import logging
 from contextlib import suppress
+from datetime import datetime, timezone
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
@@ -40,8 +41,19 @@ async def run() -> None:
     dispatcher.include_router(create_router(service))
     scheduler = AsyncIOScheduler(timezone=ZoneInfo("Asia/Yekaterinburg"))
     scheduler.add_job(service.monitor, "interval", minutes=10, id="monitor", max_instances=1, coalesce=True)
-    scheduler.add_job(service.discover, "cron", hour=12, minute=0, id="discover", max_instances=1, coalesce=True)
     initial_monitor = None
+    discovery_task = None
+
+    async def discovery_loop() -> None:
+        while True:
+            try:
+                _, _, _, retry = await service.discover()
+                delay = max(60, (retry - datetime.now(timezone.utc)).total_seconds()) if retry else 60
+            except Exception:
+                logging.exception("Цикл поиска чатов прерван; повтор через час")
+                delay = 3600
+            await asyncio.sleep(delay)
+
     try:
         await source.start()
         try:
@@ -50,14 +62,16 @@ async def run() -> None:
         except Exception:
             logging.exception("Не удалось обновить меню бота")
         scheduler.start()
-        logging.info("Мониторинг каждые 10 минут; поиск новых чатов ежедневно в 12:00 по Екатеринбургу")
+        logging.info("Мониторинг каждые 10 минут; поиск новых чатов до исчерпания бесплатного лимита Telegram")
         initial_monitor = asyncio.create_task(service.monitor())
+        discovery_task = asyncio.create_task(discovery_loop())
         await dispatcher.start_polling(bot, handle_signals=True)
     finally:
-        if initial_monitor:
-            initial_monitor.cancel()
-            with suppress(asyncio.CancelledError):
-                await initial_monitor
+        for task in (initial_monitor, discovery_task):
+            if task:
+                task.cancel()
+                with suppress(asyncio.CancelledError):
+                    await task
         if scheduler.running:
             scheduler.shutdown(wait=False)
         await ai.close()

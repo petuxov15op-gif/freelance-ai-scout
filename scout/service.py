@@ -3,10 +3,10 @@ from __future__ import annotations
 import asyncio
 import logging
 import re
-from datetime import datetime, timezone
-from zoneinfo import ZoneInfo
+from datetime import datetime, timedelta, timezone
 
 from aiogram import Bot
+from telethon.errors import FloodWaitError
 
 from .core import explicit_ai_coding, explicit_it_task, likely_job, ongoing_role, potential_job
 from .models import Channel
@@ -21,7 +21,14 @@ JOB_STATUS_LABELS = {
     "won": "🏆 Получил заказ",
 }
 
-DISCOVERY_QUERIES = ("заказы разработка", "заказы программистам", "фриланс разработка")
+DISCOVERY_QUERIES = (
+    "нужен разработчик", "нужно разработать", "ищу программиста", "заказ на разработку",
+    "сделать сайт", "разработать сайт", "сделать бота", "разработать бота",
+    "нужен python", "нужен frontend", "нужен backend", "интеграция api",
+    "нужна автоматизация", "написать скрипт", "разработать приложение", "нужна верстка",
+    "заказ на crm", "доработать сайт", "нужен программист", "заказ на бота",
+    "заказы разработка", "заказы программистам", "фриланс разработка",
+)
 DEVELOPMENT_TASK = re.compile(
     r"\b(?:разработ|программ|сайт|лендинг|верстк|бот\b|автоматизац|интеграц|парсинг|"
     r"скрипт|приложен|crm\b|api\b|python\b|frontend\b|backend\b|wordpress\b|tilda\b)",
@@ -94,38 +101,63 @@ class ScoutService:
         await self.bot.send_message(self.owner_id, text[:4000], reply_markup=candidate_keyboard(channel.id))
         self.repo.mark_candidate_notified(channel.id)
 
-    async def discover(self, manual: bool = False) -> tuple[str, int, int]:
+    async def discover(self) -> tuple[str, int, int, datetime | None]:
         if self.discovery_lock.locked():
-            return "running", 0, 0
+            return "running", 0, 0, None
         async with self.discovery_lock:
-            today = datetime.now(ZoneInfo("Asia/Yekaterinburg")).date().isoformat()
-            setting = "last_manual_discovery_date" if manual else "last_discovery_date"
-            if self.repo.setting(setting) == today:
-                return "already", 0, 0
-            # Reserve this day's run before Telegram requests, including across restarts.
-            self.repo.set_setting(setting, today)
+            now = datetime.now(timezone.utc)
+            retry = self.repo.setting("discovery_retry_at")
+            if retry and datetime.fromisoformat(retry) > now:
+                return "wait", 0, 0, datetime.fromisoformat(retry)
             known = {channel.telegram_id for status in ("approved", "pending", "rejected", "blocked")
                      for channel in self.repo.list_channels(status)}
             suggested = 0
             errors = 0
-            for query in DISCOVERY_QUERIES:
-                reviewed_in_query = 0
+            start = int(self.repo.setting("discovery_query_index", "0"))
+            for offset in range(len(DISCOVERY_QUERIES)):
+                index = (start + offset) % len(DISCOVERY_QUERIES)
+                query = DISCOVERY_QUERIES[index]
                 try:
-                    found = await self.source.search_public_chats(query, limit=30)
+                    quota = await self.source.post_search_quota(query)
+                    if not quota.remains and not quota.query_is_free:
+                        wait_until = (datetime.fromtimestamp(quota.wait_till, timezone.utc) if quota.wait_till
+                                      else datetime.now(timezone.utc) + timedelta(hours=1))
+                        self.repo.set_setting("discovery_retry_at", wait_until.isoformat())
+                        log.info("Бесплатный поиск Telegram исчерпан; повтор после %s", wait_until.isoformat())
+                        return "wait", suggested, errors, wait_until
+                    found = await self.source.search_public_posts(query)
+                    try:
+                        chats = await self.source.search_public_chats(query, limit=30)
+                    except FloodWaitError:
+                        raise
+                    except Exception:
+                        errors += 1
+                        log.exception("Поиск публичных чатов по запросу %s не удался", query)
+                        chats = []
+                    self.repo.set_setting("discovery_query_index", str((index + 1) % len(DISCOVERY_QUERIES)))
+                except FloodWaitError as exc:
+                    wait_until = datetime.now(timezone.utc) + timedelta(seconds=max(exc.seconds, 60))
+                    self.repo.set_setting("discovery_retry_at", wait_until.isoformat())
+                    log.warning("Telegram ограничил поиск на %s секунд", exc.seconds)
+                    return "wait", suggested, errors, wait_until
                 except Exception:
                     errors += 1
-                    log.exception("Поиск чатов по запросу %s не удался", query)
+                    log.exception("Поиск публикаций по запросу %s не удался", query)
                     continue
-                for entity in found:
-                    if entity.id in known or reviewed_in_query >= 4:
+                for entity, post in [*found, *((chat, None) for chat in chats)]:
+                    content = (post.raw_text or "") if post else ""
+                    if entity.id in known:
+                        continue
+                    if post and (post.date < datetime.now(timezone.utc) - timedelta(days=3)
+                                 or not likely_job(content) or not DEVELOPMENT_TASK.search(content)):
                         continue
                     known.add(entity.id)
-                    reviewed_in_query += 1
                     try:
                         examples, active, ad_ratio = await self.source.inspect(entity, max_age_days=3)
                         if not active or ad_ratio > .5:
                             continue
-                        examples = [text for text in examples if likely_job(text) and DEVELOPMENT_TASK.search(text)]
+                        examples = [text for text in dict.fromkeys([content, *examples])
+                                    if likely_job(text) and DEVELOPMENT_TASK.search(text)]
                         verified = []
                         for example in examples[:3]:
                             if (await self.ai.ask("candidate", example))["suitable"]:
@@ -141,10 +173,16 @@ class ScoutService:
                         if channel:
                             await self.notify_candidate(channel)
                             suggested += 1
+                    except FloodWaitError as exc:
+                        wait_until = datetime.now(timezone.utc) + timedelta(seconds=max(exc.seconds, 60))
+                        self.repo.set_setting("discovery_retry_at", wait_until.isoformat())
+                        log.warning("Telegram ограничил проверку чатов на %s секунд", exc.seconds)
+                        return "wait", suggested, errors, wait_until
                     except Exception:
                         errors += 1
                         log.exception("Проверка найденного чата @%s не удалась", entity.username)
-            return "done", suggested, errors
+            # If all distinct queries were free/cached, check again later for new posts.
+            return "done", suggested, errors, datetime.now(timezone.utc) + timedelta(hours=1)
 
     async def monitor(self) -> None:
         if self.monitor_lock.locked():

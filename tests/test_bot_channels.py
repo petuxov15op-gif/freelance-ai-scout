@@ -35,14 +35,14 @@ def test_main_menu_has_each_action_and_telegram_command_menu():
 @pytest.mark.asyncio
 async def test_manual_search_menu_button_starts_discovery_and_reports_result(repo):
     service = SimpleNamespace(owner_id=1, repo=repo, discovery_lock=asyncio.Lock(),
-                              discover=AsyncMock(return_value=("done", 2, 0)))
+                              discover=AsyncMock(return_value=("done", 2, 0, None)))
     router = create_router(service)
     handler = next(item.callback for item in router.message.handlers if item.callback.__name__ == "menu_action")
     message = SimpleNamespace(text="🔎 Найти чаты сейчас", answer=AsyncMock())
 
     await handler(message)
 
-    service.discover.assert_awaited_once_with(manual=True)
+    service.discover.assert_awaited_once_with()
     assert "Запускаю поиск" in message.answer.await_args_list[0].args[0]
     assert "Новых чатов на рассмотрение: 2" in message.answer.await_args_list[-1].args[0]
 

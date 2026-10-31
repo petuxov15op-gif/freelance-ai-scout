@@ -51,6 +51,21 @@ class TelegramSource:
         return [chat for chat in result.chats
                 if isinstance(chat, types.Channel) and chat.username]
 
+    async def post_search_quota(self, query: str):
+        return await self.client(functions.channels.CheckSearchPostsFloodRequest(query=query))
+
+    async def search_public_posts(self, query: str, limit: int = 100):
+        result = await self.client(functions.channels.SearchPostsRequest(
+            offset_rate=0, offset_peer=types.InputPeerEmpty(), offset_id=0,
+            limit=limit, query=query,
+        ))
+        chats = {chat.id: chat for chat in result.chats
+                 if isinstance(chat, types.Channel) and chat.username}
+        return [(chats[message.peer_id.channel_id], message)
+                for message in result.messages
+                if isinstance(message.peer_id, types.PeerChannel)
+                and message.peer_id.channel_id in chats]
+
     async def examples(self, entity, limit: int = 12) -> list[str]:
         examples, _, _ = await self.inspect(entity, limit)
         return examples

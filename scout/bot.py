@@ -198,7 +198,7 @@ def create_router(service) -> Router:
         stats = repo.stats()
         telegram_status = "подключён" if service.source.client.is_connected() else "отключён"
         await message.answer(f"Источники: {stats['approved']} · кандидаты: {stats['pending']}\n"
-                             "Поиск новых чатов: ежедневно в 12:00 (Екб)\nМониторинг: каждые 10 минут\n"
+                             "Поиск новых чатов: по бесплатному лимиту Telegram\nМониторинг: каждые 10 минут\n"
                              "Присылаю: разовые IT-заказы и IT-работу/подработку с явным вайбкодингом\n"
                              "Уведомления: без порога рейтинга\n"
                              f"OpenRouter: {service.ai.last_status}, модель {service.ai.model}, учтено сегодня ${repo.cost_today():.4f}\n"
@@ -279,21 +279,19 @@ def create_router(service) -> Router:
         if service.discovery_lock.locked():
             await message.answer("Поиск уже идёт. Подожди итоговое сообщение.")
             return
-        today = datetime.now(ZoneInfo("Asia/Yekaterinburg")).date().isoformat()
-        if repo.setting("last_manual_discovery_date") == today:
-            await message.answer("Сегодня ручной поиск уже запускался. Автоматический запуск завтра в 12:00 (Екб).")
-            return
         await message.answer("Запускаю поиск IT-чатов. Когда проверка закончится, пришлю итог и карточки подходящих чатов.")
         try:
-            status, found, errors = await service.discover(manual=True)
+            status, found, errors, retry = await service.discover()
         except Exception:
             log.exception("Ручной поиск чатов")
             await message.answer("Поиск завершился с ошибкой. Подробности записаны в журнал бота.")
             return
         if status == "running":
             await message.answer("Поиск уже идёт. Подожди итоговое сообщение.")
-        elif status == "already":
-            await message.answer("Сегодня ручной поиск уже запускался. Автоматический запуск завтра в 12:00 (Екб).")
+        elif status == "wait":
+            time = retry.astimezone(ZoneInfo("Asia/Yekaterinburg")).strftime("%d.%m %H:%M") if retry else "позже"
+            await message.answer(f"Бесплатный поиск Telegram пока недоступен. Повторю после {time} (Екб)."
+                                 + (f" Новых чатов на рассмотрение: {found}." if found else ""))
         else:
             await message.answer(f"Поиск завершён. Новых чатов на рассмотрение: {found}."
                                  + (f" Ошибок при проверке: {errors}." if errors else ""))
