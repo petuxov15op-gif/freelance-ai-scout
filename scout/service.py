@@ -94,22 +94,26 @@ class ScoutService:
         await self.bot.send_message(self.owner_id, text[:4000], reply_markup=candidate_keyboard(channel.id))
         self.repo.mark_candidate_notified(channel.id)
 
-    async def discover(self) -> None:
+    async def discover(self, manual: bool = False) -> tuple[str, int, int]:
         if self.discovery_lock.locked():
-            return
+            return "running", 0, 0
         async with self.discovery_lock:
             today = datetime.now(ZoneInfo("Asia/Yekaterinburg")).date().isoformat()
-            if self.repo.setting("last_discovery_date") == today:
-                return
+            setting = "last_manual_discovery_date" if manual else "last_discovery_date"
+            if self.repo.setting(setting) == today:
+                return "already", 0, 0
             # Reserve this day's run before Telegram requests, including across restarts.
-            self.repo.set_setting("last_discovery_date", today)
+            self.repo.set_setting(setting, today)
             known = {channel.telegram_id for status in ("approved", "pending", "rejected", "blocked")
                      for channel in self.repo.list_channels(status)}
+            suggested = 0
+            errors = 0
             for query in DISCOVERY_QUERIES:
                 reviewed_in_query = 0
                 try:
                     found = await self.source.search_public_chats(query, limit=30)
                 except Exception:
+                    errors += 1
                     log.exception("Поиск чатов по запросу %s не удался", query)
                     continue
                 for entity in found:
@@ -136,8 +140,11 @@ class ScoutService:
                         )
                         if channel:
                             await self.notify_candidate(channel)
+                            suggested += 1
                     except Exception:
+                        errors += 1
                         log.exception("Проверка найденного чата @%s не удалась", entity.username)
+            return "done", suggested, errors
 
     async def monitor(self) -> None:
         if self.monitor_lock.locked():

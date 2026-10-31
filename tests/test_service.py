@@ -349,3 +349,21 @@ async def test_discovery_only_suggests_recent_development_chats_once_daily(repo)
     bot.send_message.assert_awaited_once()
     await service.discover()
     assert len(source.searches) == 3
+
+
+@pytest.mark.asyncio
+async def test_manual_discovery_does_not_skip_next_scheduled_run(repo):
+    class DiscoverySource(FakeSource):
+        def __init__(self):
+            self.searches = 0
+
+        async def search_public_chats(self, query, limit=30):
+            self.searches += 1
+            return []
+
+    source = DiscoverySource()
+    service = ScoutService(repo, source, FakeAI(), SimpleNamespace(), 1)
+    assert await service.discover(manual=True) == ("done", 0, 0)
+    assert await service.discover(manual=True) == ("already", 0, 0)
+    assert await service.discover() == ("done", 0, 0)
+    assert source.searches == 6

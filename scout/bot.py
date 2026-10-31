@@ -17,6 +17,7 @@ log = logging.getLogger(__name__)
 MENU_ACTIONS = {
     "📡 Источники": "sources",
     "🕓 Кандидаты": "pending",
+    "🔎 Найти чаты сейчас": "discover",
     "➕ Добавить канал": "add",
     "📋 Заказы": "latest",
     "⭐ Лучшие": "top",
@@ -273,6 +274,30 @@ def create_router(service) -> Router:
     async def settings(message: Message):
         await message.answer(settings_text())
 
+    @router.message(Command("discover"))
+    async def discover(message: Message):
+        if service.discovery_lock.locked():
+            await message.answer("Поиск уже идёт. Подожди итоговое сообщение.")
+            return
+        today = datetime.now(ZoneInfo("Asia/Yekaterinburg")).date().isoformat()
+        if repo.setting("last_manual_discovery_date") == today:
+            await message.answer("Сегодня ручной поиск уже запускался. Автоматический запуск завтра в 12:00 (Екб).")
+            return
+        await message.answer("Запускаю поиск IT-чатов. Когда проверка закончится, пришлю итог и карточки подходящих чатов.")
+        try:
+            status, found, errors = await service.discover(manual=True)
+        except Exception:
+            log.exception("Ручной поиск чатов")
+            await message.answer("Поиск завершился с ошибкой. Подробности записаны в журнал бота.")
+            return
+        if status == "running":
+            await message.answer("Поиск уже идёт. Подожди итоговое сообщение.")
+        elif status == "already":
+            await message.answer("Сегодня ручной поиск уже запускался. Автоматический запуск завтра в 12:00 (Екб).")
+        else:
+            await message.answer(f"Поиск завершён. Новых чатов на рассмотрение: {found}."
+                                 + (f" Ошибок при проверке: {errors}." if errors else ""))
+
     @router.message(F.text.in_(MENU_ACTIONS))
     async def menu_action(message: Message):
         action = MENU_ACTIONS[message.text]
@@ -280,7 +305,7 @@ def create_router(service) -> Router:
             await message.answer("Пришлите @имя канала или ссылку t.me. Можно несколько через пробел.")
             return
         handlers = {"sources": sources, "pending": pending,
-                    "latest": latest, "top": top, "status": status, "check": check,
+                    "latest": latest, "top": top, "status": status, "check": check, "discover": discover,
                     "stats": stats, "settings": settings}
         await handlers[action](message)
 

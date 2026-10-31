@@ -1,9 +1,10 @@
 import pytest
+import asyncio
 from datetime import datetime, timezone
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
-from scout.bot import MENU_ACTIONS, bot_commands, health_text, main_menu, parse_channel_list
+from scout.bot import MENU_ACTIONS, bot_commands, create_router, health_text, main_menu, parse_channel_list
 from scout.service import ScoutService
 
 
@@ -25,9 +26,25 @@ def test_main_menu_has_each_action_and_telegram_command_menu():
     assert {command.command for command in bot_commands()} >= {"menu", "sources", "add", "settings"}
     assert "discover" not in {command.command for command in bot_commands()}
     assert "➕ Добавить канал" in labels
+    assert "🔎 Найти чаты сейчас" in labels
     assert "🩺 Проверить" in labels
     assert "check" in {command.command for command in bot_commands()}
     assert all("Поиск каналов" not in label for label in labels)
+
+
+@pytest.mark.asyncio
+async def test_manual_search_menu_button_starts_discovery_and_reports_result(repo):
+    service = SimpleNamespace(owner_id=1, repo=repo, discovery_lock=asyncio.Lock(),
+                              discover=AsyncMock(return_value=("done", 2, 0)))
+    router = create_router(service)
+    handler = next(item.callback for item in router.message.handlers if item.callback.__name__ == "menu_action")
+    message = SimpleNamespace(text="🔎 Найти чаты сейчас", answer=AsyncMock())
+
+    await handler(message)
+
+    service.discover.assert_awaited_once_with(manual=True)
+    assert "Запускаю поиск" in message.answer.await_args_list[0].args[0]
+    assert "Новых чатов на рассмотрение: 2" in message.answer.await_args_list[-1].args[0]
 
 
 @pytest.mark.asyncio

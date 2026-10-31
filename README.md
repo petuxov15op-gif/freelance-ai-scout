@@ -64,7 +64,7 @@ The named `scout_data` volume holds the SQLite database and Telegram session. Pr
 
 ## Using the bot
 
-Send `/start` to show the menu. Use **Add channel**, send a public `@username` or `t.me` link, and confirm **Add** on the channel card. The menu also exposes sources, pending items, recent matches, statistics, and settings. Commands include `/status`, `/sources`, `/pending`, `/latest`, `/top`, `/stats`, `/settings`, and `/add`.
+Send `/start` to show the menu. Use **Find chats now** for one manual discovery run per day; the scheduled 12:00 Yekaterinburg run remains independent. Use **Add channel**, send a public `@username` or `t.me` link, and confirm **Add** on the channel card. The menu also exposes sources, pending items, recent matches, statistics, and settings. Commands include `/status`, `/sources`, `/pending`, `/latest`, `/top`, `/stats`, `/settings`, and `/add`.
 
 ## Tests
 
