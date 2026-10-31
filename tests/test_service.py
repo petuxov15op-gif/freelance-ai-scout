@@ -4,6 +4,7 @@ from unittest.mock import AsyncMock
 
 import pytest
 
+from scout.bot import create_router, job_keyboard
 from scout.service import ScoutService
 
 
@@ -38,6 +39,41 @@ class FakeAI:
         return {"title": "Сайт", "category": "сайт", "requirements": ["страница"],
                 "budget": None, "currency": None, "deadline": None,
                 "score_reason": "выполнимо", "score": 85}
+
+
+@pytest.mark.asyncio
+async def test_feedback_marks_card_and_allows_changing_decision(repo):
+    channel = repo.candidate(100, "scoutjobs", "Jobs", "", None, 70, "", [])
+    repo.transition_channel(channel.id, "approved")
+    bot = SimpleNamespace(send_message=AsyncMock(return_value=SimpleNamespace(message_id=42)))
+    service = ScoutService(repo, FakeSource(), FakeAI(), bot, 1)
+    await service.monitor()
+    job = repo.jobs()[0]
+    callback_handler = create_router(service).callback_query.handlers[0].callback
+    message = SimpleNamespace(edit_text=AsyncMock(), edit_reply_markup=AsyncMock())
+    callback = SimpleNamespace(message=message, answer=AsyncMock())
+
+    assert "Не подходит" in str(job_keyboard(job.id, None))
+    callback.data = f"feedback:irrelevant:{job.id}"
+    await callback_handler(callback)
+    assert repo.job(job.id).status == "irrelevant"
+    assert message.edit_text.await_args.args[0].startswith(f"❌ Не подходит · Заказ #{job.id}")
+    assert "Изменить решение" in str(message.edit_text.await_args.kwargs["reply_markup"])
+    assert "feedback:irrelevant" not in str(message.edit_text.await_args.kwargs["reply_markup"])
+
+    callback.data = f"feedback:change:{job.id}"
+    await callback_handler(callback)
+    assert "Снять отметку" in str(message.edit_reply_markup.await_args.kwargs["reply_markup"])
+
+    callback.data = f"feedback:interesting:{job.id}"
+    await callback_handler(callback)
+    assert repo.job(job.id).status == "interesting"
+    assert message.edit_text.await_args.args[0].startswith(f"⭐ Интересно · Заказ #{job.id}")
+
+    callback.data = f"feedback:new:{job.id}"
+    await callback_handler(callback)
+    assert repo.job(job.id).status == "new"
+    assert message.edit_text.await_args.args[0].startswith(f"Заказ #{job.id}")
 
 
 @pytest.mark.asyncio

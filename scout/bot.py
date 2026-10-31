@@ -9,6 +9,7 @@ from aiogram.filters import Command
 from aiogram.types import (BotCommand, CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup,
                            KeyboardButton, Message, ReplyKeyboardMarkup)
 
+from .service import JOB_STATUS_LABELS, job_text
 from .telegram import parse_public_channel
 
 log = logging.getLogger(__name__)
@@ -65,18 +66,25 @@ def candidate_keyboard(channel_id: int) -> InlineKeyboardMarkup:
     ])
 
 
-def job_keyboard(job_id: int, link: str | None) -> InlineKeyboardMarkup:
+def job_keyboard(job_id: int, link: str | None, status: str = "new", editing: bool = False) -> InlineKeyboardMarkup:
     rows = []
     if link:
         rows.append([InlineKeyboardButton(text="Открыть объявление", url=link)])
-    rows.extend([
+    rows.append(
         [InlineKeyboardButton(text="Разобрать заказ", callback_data=f"plan:{job_id}"),
-         InlineKeyboardButton(text="Подготовить отклик", callback_data=f"draft:{job_id}")],
-        [InlineKeyboardButton(text="Интересно", callback_data=f"feedback:interesting:{job_id}"),
-         InlineKeyboardButton(text="Не подходит", callback_data=f"feedback:irrelevant:{job_id}")],
-        [InlineKeyboardButton(text="Откликнулся", callback_data=f"feedback:applied:{job_id}"),
-         InlineKeyboardButton(text="Получил заказ", callback_data=f"feedback:won:{job_id}")],
-    ])
+         InlineKeyboardButton(text="Подготовить отклик", callback_data=f"draft:{job_id}")]
+    )
+    if status != "new" and not editing:
+        rows.append([InlineKeyboardButton(text="Изменить решение", callback_data=f"feedback:change:{job_id}")])
+    else:
+        rows.extend([
+            [InlineKeyboardButton(text="Интересно", callback_data=f"feedback:interesting:{job_id}"),
+             InlineKeyboardButton(text="Не подходит", callback_data=f"feedback:irrelevant:{job_id}")],
+            [InlineKeyboardButton(text="Откликнулся", callback_data=f"feedback:applied:{job_id}"),
+             InlineKeyboardButton(text="Получил заказ", callback_data=f"feedback:won:{job_id}")],
+        ])
+        if status != "new":
+            rows.append([InlineKeyboardButton(text="Снять отметку", callback_data=f"feedback:new:{job_id}")])
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
@@ -249,7 +257,7 @@ def create_router(service) -> Router:
     @router.message(Command("latest"))
     async def latest(message: Message):
         jobs = repo.jobs()
-        await message.answer("\n".join(f"#{j.id} · {j.score} · {j.title}" for j in jobs)[:4000] or "Заказов пока нет")
+        await message.answer("\n".join(f"{JOB_STATUS_LABELS.get(j.status, '🆕 Новый')} · #{j.id} · {j.score} · {j.title}" for j in jobs)[:4000] or "Заказов пока нет")
 
     @router.message(Command("top"))
     async def top(message: Message):
@@ -307,9 +315,23 @@ def create_router(service) -> Router:
                 await callback.message.answer("\n\n".join(examples)[:4000] or "Примеры не найдены")
                 await callback.answer()
                 return
-            if len(parts) == 3 and parts[0] == "feedback" and parts[1] in {"interesting", "irrelevant", "applied", "won"}:
-                repo.add_feedback(int(parts[2]), parts[1])
-                await callback.answer("Сохранено")
+            if len(parts) == 3 and parts[0] == "feedback" and parts[1] in {*JOB_STATUS_LABELS, "new", "change"}:
+                job_id = int(parts[2])
+                job = repo.job(job_id)
+                if job is None:
+                    await callback.answer("Заказ не найден", show_alert=True)
+                    return
+                link = repo.job_link(job_id)
+                if parts[1] == "change":
+                    await callback.message.edit_reply_markup(reply_markup=job_keyboard(job_id, link, job.status, editing=True))
+                    await callback.answer()
+                    return
+                repo.add_feedback(job_id, parts[1])
+                job = repo.job(job_id)
+                analysis = repo.analysis(job_id)
+                await callback.message.edit_text(job_text(job, analysis, link)[:4000],
+                                                 reply_markup=job_keyboard(job_id, link, job.status))
+                await callback.answer("Решение сохранено")
                 return
             if len(parts) == 2 and parts[0] in {"plan", "draft"}:
                 job_id = int(parts[1])

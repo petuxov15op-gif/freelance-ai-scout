@@ -12,11 +12,19 @@ from .repository import Repository
 
 log = logging.getLogger(__name__)
 
+JOB_STATUS_LABELS = {
+    "interesting": "⭐ Интересно",
+    "irrelevant": "❌ Не подходит",
+    "applied": "📨 Откликнулся",
+    "won": "🏆 Получил заказ",
+}
+
 
 def job_text(job, analysis, link: str | None) -> str:
     result = analysis.result
     requirements = ", ".join(result["requirements"][:4]) or "не указаны"
-    return (f"Заказ #{job.id}: {result['title']}\n"
+    status = JOB_STATUS_LABELS.get(job.status)
+    return (f"{status + ' · ' if status else ''}Заказ #{job.id}: {result['title']}\n"
             f"Рейтинг: {job.score}/100 · {result['category']}\n"
             f"Бюджет: {result['budget'] or 'не указан'} {result['currency'] or ''}\n"
             f"Требования: {requirements}\n"
