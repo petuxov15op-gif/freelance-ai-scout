@@ -1,0 +1,13 @@
+.env
+.venv/
+.git/
+.pytest_cache/
+*.egg-info/
+__pycache__/
+*.py[cod]
+*.session*
+*.db
+data/
+private/
+tests/
+vpn/config.json

@@ -1,0 +1,13 @@
+services:
+  scout:
+    build: .
+    env_file: .env
+    environment:
+      SESSION_PATH: /app/data/telegram_user
+    volumes:
+      - scout_data:/app/data
+    restart: unless-stopped
+    init: true
+
+volumes:
+  scout_data:

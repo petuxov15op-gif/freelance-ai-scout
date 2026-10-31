@@ -1,0 +1,49 @@
+import pytest
+from datetime import datetime, timezone
+from types import SimpleNamespace
+from unittest.mock import AsyncMock
+
+from scout.bot import MENU_ACTIONS, bot_commands, health_text, main_menu, parse_channel_list
+from scout.service import ScoutService
+
+
+def test_channel_list_accepts_handles_and_links():
+    assert parse_channel_list("@job_developer, @FrWork3 https://t.me/digitaltender @job_developer") == [
+        "job_developer", "FrWork3", "digitaltender"
+    ]
+
+
+def test_channel_list_rejects_other_text():
+    with pytest.raises(ValueError):
+        parse_channel_list("@job_developer hello")
+
+
+def test_main_menu_has_each_action_and_telegram_command_menu():
+    labels = [button.text for row in main_menu().keyboard for button in row]
+    assert labels == list(MENU_ACTIONS)
+    assert main_menu().is_persistent is True
+    assert {command.command for command in bot_commands()} >= {"menu", "sources", "add", "settings"}
+    assert "discover" not in {command.command for command in bot_commands()}
+    assert "➕ Добавить канал" in labels
+    assert "🩺 Проверить" in labels
+    assert "check" in {command.command for command in bot_commands()}
+    assert all("Поиск каналов" not in label for label in labels)
+
+
+@pytest.mark.asyncio
+async def test_health_report_shows_monitor_error_and_ai_failure(repo):
+    channel = repo.candidate(100, "jobs", "Jobs", "", None, 50, "", [])
+    repo.transition_channel(channel.id, "approved")
+    source = SimpleNamespace(client=SimpleNamespace(is_connected=lambda: True))
+    ai = SimpleNamespace(check_health=AsyncMock(return_value=(False, "Недостаточно средств (HTTP 402).")))
+    service = ScoutService(repo, source, ai, SimpleNamespace(), 1)
+    service.last_monitor_started = datetime.now(timezone.utc)
+    service.last_monitor_errors = ["@jobs: RuntimeError"]
+
+    report = await health_text(service)
+
+    assert "База данных: работает" in report
+    assert "За 24 часа:" in report
+    assert "Недостаточно средств" in report
+    assert "@jobs: RuntimeError" in report
+    assert "Итог: обнаружены проблемы" in report

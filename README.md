@@ -1,6 +1,6 @@
 # Freelance AI Scout
 
-![Freelance AI Scout cover](portfolio/ai-scout-cover.png)
+![Freelance AI Scout cover](portfolio/ai-scout-cover.jpg)
 
 A personal Telegram bot that monitors owner-approved channels for relevant freelance software projects and AI-assisted development roles. It filters posts, explains why an opportunity fits, and sends candidates to the owner. It can draft a reply, but never contacts clients on its own.
 

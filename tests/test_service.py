@@ -1,0 +1,278 @@
+from datetime import datetime, timezone
+from types import SimpleNamespace
+from unittest.mock import AsyncMock
+
+import pytest
+
+from scout.service import ScoutService
+
+
+class FakeSource:
+    async def messages(self, channel, min_id):
+        if min_id < 1:
+            yield SimpleNamespace(id=1, raw_text="Нужен сайт для небольшой компании, оплата и детали по договоренности",
+                                  date=datetime.now(timezone.utc), media=None, fwd_from=None)
+
+    async def resolve(self, username):
+        return SimpleNamespace(id=100, username=username, title="Jobs", broadcast=True)
+
+    async def inspect(self, entity):
+        raise RuntimeError("История временно недоступна")
+
+    async def description(self, entity):
+        return "Публичный канал"
+
+
+class FakeAI:
+    model = "test-model"
+
+    def __init__(self, fail=False):
+        self.fail = fail
+
+    async def ask(self, kind, text):
+        if self.fail:
+            raise RuntimeError("OpenRouter недоступен")
+        if kind == "prefilter":
+            return {"is_job": True, "is_it": True, "codex_feasible": True,
+                    "is_ongoing": False, "ai_coding_explicit": False, "reason": "заказ"}
+        return {"title": "Сайт", "category": "сайт", "requirements": ["страница"],
+                "budget": None, "currency": None, "deadline": None,
+                "score_reason": "выполнимо", "score": 85}
+
+
+@pytest.mark.asyncio
+async def test_monitor_recovers_after_ai_outage(repo):
+    channel = repo.candidate(100, "scoutjobs", "Jobs", "", None, 70, "", [])
+    repo.transition_channel(channel.id, "approved")
+    bot = SimpleNamespace(send_message=AsyncMock(return_value=SimpleNamespace(message_id=42)))
+    service = ScoutService(repo, FakeSource(), FakeAI(fail=True), bot, 1)
+    await service.monitor()
+    assert repo.cursor(channel.id) == 1
+    assert len(repo.pending_messages()) == 1
+    assert service.last_monitor_started is not None
+    assert service.last_monitor_errors == ["Обработка объявления: RuntimeError"]
+    service.ai = FakeAI()
+    await service.monitor()
+    assert len(repo.pending_messages()) == 0
+    assert service.last_monitor_errors == []
+    assert repo.stats()["jobs"] == 1
+    assert bot.send_message.await_count == 1
+    await service.monitor()
+    assert bot.send_message.await_count == 1
+
+
+@pytest.mark.asyncio
+async def test_suitable_job_is_sent_without_score_threshold(repo):
+    channel = repo.candidate(100, "scoutjobs", "Jobs", "", None, 70, "", [])
+    repo.transition_channel(channel.id, "approved")
+
+    class SuitableAI(FakeAI):
+        async def ask(self, kind, text):
+            result = await super().ask(kind, text)
+            if kind == "deep":
+                result["score"] = 25
+            return result
+
+    bot = SimpleNamespace(send_message=AsyncMock(return_value=SimpleNamespace(message_id=42)))
+    service = ScoutService(repo, FakeSource(), SuitableAI(), bot, 1)
+    await service.monitor()
+    bot.send_message.assert_awaited_once()
+    await service.monitor()
+    bot.send_message.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_generic_remote_job_is_not_sent(repo):
+    channel = repo.candidate(100, "scoutjobs", "Jobs", "", None, 70, "", [])
+    repo.transition_channel(channel.id, "approved")
+
+    class GenericSource(FakeSource):
+        async def messages(self, channel, min_id):
+            if min_id < 1:
+                yield SimpleNamespace(id=1, raw_text="Требуется чат-менеджер на удалённую работу, отвечать клиентам в Telegram",
+                                      date=datetime.now(timezone.utc), media=None, fwd_from=None)
+
+    bot = SimpleNamespace(send_message=AsyncMock())
+    service = ScoutService(repo, GenericSource(), FakeAI(), bot, 1)
+    await service.monitor()
+    bot.send_message.assert_not_awaited()
+    assert repo.stats()["jobs"] == 0
+
+
+@pytest.mark.asyncio
+async def test_ai_rejects_permanent_it_role_without_vibe_coding(repo):
+    channel = repo.candidate(100, "scoutjobs", "Jobs", "", None, 70, "", [])
+    repo.transition_channel(channel.id, "approved")
+
+    class StrictAI(FakeAI):
+        async def ask(self, kind, text):
+            if kind == "prefilter":
+                return {"is_job": True, "is_it": True, "codex_feasible": True,
+                        "is_ongoing": True, "ai_coding_explicit": False, "reason": "найм"}
+            return await super().ask(kind, text)
+
+    bot = SimpleNamespace(send_message=AsyncMock())
+    service = ScoutService(repo, FakeSource(), StrictAI(), bot, 1)
+    await service.monitor()
+    bot.send_message.assert_not_awaited()
+    assert repo.stats()["jobs"] == 0
+
+
+@pytest.mark.asyncio
+async def test_permanent_it_role_with_explicit_vibe_coding_is_sent(repo):
+    channel = repo.candidate(100, "scoutjobs", "Jobs", "", None, 70, "", [])
+    repo.transition_channel(channel.id, "approved")
+
+    class VibeSource(FakeSource):
+        async def messages(self, channel, min_id):
+            if min_id < 1:
+                yield SimpleNamespace(id=1, raw_text="Вакансия Python-разработчика в штат: писать ботов с помощью вайбкодинга и Codex, зарплата 120000 рублей",
+                                      date=datetime.now(timezone.utc), media=None, fwd_from=None)
+
+    class VibeAI(FakeAI):
+        async def ask(self, kind, text):
+            if kind == "prefilter":
+                return {"is_job": True, "is_it": True, "codex_feasible": True,
+                        "is_ongoing": True, "ai_coding_explicit": True, "reason": "разработка с Codex"}
+            return await super().ask(kind, text)
+
+    bot = SimpleNamespace(send_message=AsyncMock(return_value=SimpleNamespace(message_id=42)))
+    service = ScoutService(repo, VibeSource(), VibeAI(), bot, 1)
+    await service.monitor()
+    bot.send_message.assert_awaited_once()
+    await service.monitor()
+    bot.send_message.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_permanent_it_role_without_explicit_ai_coding_is_not_sent(repo):
+    channel = repo.candidate(100, "scoutjobs", "Jobs", "", None, 70, "", [])
+    repo.transition_channel(channel.id, "approved")
+
+    class OrdinaryRoleSource(FakeSource):
+        async def messages(self, channel, min_id):
+            if min_id < 1:
+                yield SimpleNamespace(id=1, raw_text="Вакансия Python-разработчика в штат: писать ботов для клиентов, зарплата 120000 рублей",
+                                      date=datetime.now(timezone.utc), media=None, fwd_from=None)
+
+    bot = SimpleNamespace(send_message=AsyncMock())
+    service = ScoutService(repo, OrdinaryRoleSource(), FakeAI(), bot, 1)
+    await service.monitor()
+    bot.send_message.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("announcement, should_send", [
+    ("Подработка: поддерживать Python-бота по 3 часа в день, оплата ежемесячно", False),
+    ("Подработка: поддерживать Python-бота по 3 часа в день с помощью Codex, оплата ежемесячно", True),
+    ("Разовая подработка: написать Python-скрипт для выгрузки данных, оплата за результат", True),
+])
+async def test_part_time_requires_explicit_ai_coding_except_one_off(repo, announcement, should_send):
+    channel = repo.candidate(100, "scoutjobs", "Jobs", "", None, 70, "", [])
+    repo.transition_channel(channel.id, "approved")
+
+    class PartTimeSource(FakeSource):
+        async def messages(self, channel, min_id):
+            if min_id < 1:
+                yield SimpleNamespace(id=1, raw_text=announcement,
+                                      date=datetime.now(timezone.utc), media=None, fwd_from=None)
+
+    class PartTimeAI(FakeAI):
+        async def ask(self, kind, text):
+            if kind == "prefilter":
+                return {"is_job": True, "is_it": True, "codex_feasible": True,
+                        "is_ongoing": "Разовая" not in text,
+                        "ai_coding_explicit": "Codex" in text, "reason": "IT-задача"}
+            return await super().ask(kind, text)
+
+    bot = SimpleNamespace(send_message=AsyncMock(return_value=SimpleNamespace(message_id=42)))
+    service = ScoutService(repo, PartTimeSource(), PartTimeAI(), bot, 1)
+    await service.monitor()
+    assert bot.send_message.await_count == int(should_send)
+
+
+@pytest.mark.asyncio
+async def test_explicit_vibe_coding_part_time_is_sent_when_ai_mislabels_it_and_phrase(repo):
+    channel = repo.candidate(100, "scoutjobs", "Jobs", "", None, 70, "", [])
+    repo.transition_channel(channel.id, "approved")
+
+    class VibeSource(FakeSource):
+        async def messages(self, channel, min_id):
+            if min_id < 1:
+                yield SimpleNamespace(id=1, raw_text="Подработка 3 часа в день: делайте задачи через вайб кодинг, оплата 50000 рублей в месяц",
+                                      date=datetime.now(timezone.utc), media=None, fwd_from=None)
+
+    class MislabelingAI(FakeAI):
+        async def ask(self, kind, text):
+            if kind == "prefilter":
+                return {"is_job": True, "is_it": False, "codex_feasible": True,
+                        "is_ongoing": True, "ai_coding_explicit": False, "reason": "оплачиваемая подработка"}
+            return await super().ask(kind, text)
+
+    bot = SimpleNamespace(send_message=AsyncMock(return_value=SimpleNamespace(message_id=42)))
+    service = ScoutService(repo, VibeSource(), MislabelingAI(), bot, 1)
+    await service.monitor()
+    bot.send_message.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_it_project_must_be_feasible_with_codex(repo):
+    channel = repo.candidate(100, "scoutjobs", "Jobs", "", None, 70, "", [])
+    repo.transition_channel(channel.id, "approved")
+
+    class HardProjectAI(FakeAI):
+        async def ask(self, kind, text):
+            if kind == "prefilter":
+                return {"is_job": True, "is_it": True, "codex_feasible": False,
+                        "is_ongoing": False, "ai_coding_explicit": False, "reason": "нужна команда"}
+            return await super().ask(kind, text)
+
+    bot = SimpleNamespace(send_message=AsyncMock())
+    service = ScoutService(repo, FakeSource(), HardProjectAI(), bot, 1)
+    await service.monitor()
+    bot.send_message.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_telegram_outage_keeps_cursor(repo):
+    channel = repo.candidate(100, "scoutjobs", "Jobs", "", None, 70, "", [])
+    repo.transition_channel(channel.id, "approved")
+
+    class BrokenSource(FakeSource):
+        async def messages(self, channel, min_id):
+            raise RuntimeError("Telegram недоступен")
+            yield  # make async generator
+
+    bot = SimpleNamespace(send_message=AsyncMock())
+    service = ScoutService(repo, BrokenSource(), FakeAI(), bot, 1)
+    await service.monitor()
+    assert repo.cursor(channel.id) == 0
+
+
+@pytest.mark.asyncio
+async def test_manual_add_survives_history_error(repo):
+    bot = SimpleNamespace(send_message=AsyncMock(return_value=SimpleNamespace(message_id=1)))
+    service = ScoutService(repo, FakeSource(), FakeAI(), bot, 1)
+    channel = await service.add_channel("@scoutjobs")
+    assert channel.status == "pending"
+    assert repo.list_channels("approved") == []
+    assert bot.send_message.await_count == 1
+
+
+@pytest.mark.asyncio
+async def test_manual_channel_can_be_reviewed_when_ai_finds_no_fit(repo):
+    class CandidateSource(FakeSource):
+        async def inspect(self, entity):
+            return ["Вакансия администратора на постоянную работу с гибким графиком"], True, 0.0
+
+    class SelectiveAI(FakeAI):
+        async def ask(self, kind, text):
+            return {"suitable": False, "reason": "постоянная работа"}
+
+    bot = SimpleNamespace(send_message=AsyncMock(return_value=SimpleNamespace(message_id=1)))
+    service = ScoutService(repo, CandidateSource(), SelectiveAI(), bot, 1)
+    channel = await service.add_channel("@scoutjobs")
+    assert channel.status == "pending"
+    candidate = repo.get_candidate(channel.id)
+    assert candidate.usefulness == 10
+    assert "0 из 1" in candidate.reason

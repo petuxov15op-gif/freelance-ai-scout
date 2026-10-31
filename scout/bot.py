@@ -1,0 +1,331 @@
+from __future__ import annotations
+
+import logging
+from datetime import datetime, timezone
+from zoneinfo import ZoneInfo
+
+from aiogram import BaseMiddleware, F, Router
+from aiogram.filters import Command
+from aiogram.types import (BotCommand, CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup,
+                           KeyboardButton, Message, ReplyKeyboardMarkup)
+
+from .telegram import parse_public_channel
+
+log = logging.getLogger(__name__)
+
+MENU_ACTIONS = {
+    "📡 Источники": "sources",
+    "🕓 Кандидаты": "pending",
+    "➕ Добавить канал": "add",
+    "📋 Заказы": "latest",
+    "⭐ Лучшие": "top",
+    "📊 Статус": "status",
+    "🩺 Проверить": "check",
+    "📈 Статистика": "stats",
+    "⚙️ Настройки": "settings",
+}
+
+
+def main_menu() -> ReplyKeyboardMarkup:
+    labels = list(MENU_ACTIONS)
+    return ReplyKeyboardMarkup(
+        keyboard=[[KeyboardButton(text=label) for label in labels[i:i + 2]]
+                  for i in range(0, len(labels), 2)],
+        resize_keyboard=True, is_persistent=True,
+    )
+
+
+def bot_commands() -> list[BotCommand]:
+    return [BotCommand(command=name, description=description) for name, description in (
+        ("menu", "Показать кнопки"), ("status", "Состояние бота"),
+        ("check", "Проверить работу бота"),
+        ("sources", "Отслеживаемые каналы"),
+        ("pending", "Каналы на подтверждении"), ("add", "Добавить канал"),
+        ("latest", "Последние заказы"), ("top", "Лучшие заказы"),
+        ("stats", "Статистика"), ("settings", "Настройки"),
+    )]
+
+
+def parse_channel_list(text: str) -> list[str]:
+    parts = text.replace(",", " ").split()
+    if any(not part.startswith(("@", "https://t.me/")) for part in parts):
+        raise ValueError("Укажите каналы в виде @имя или https://t.me/имя")
+    channels = [parse_public_channel(part) for part in parts]
+    if not channels or len(channels) > 20:
+        raise ValueError("Укажите от 1 до 20 публичных каналов через пробел")
+    return list(dict.fromkeys(channels))
+
+
+def candidate_keyboard(channel_id: int) -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="Добавить", callback_data=f"channel:approved:{channel_id}"),
+         InlineKeyboardButton(text="Отклонить", callback_data=f"channel:rejected:{channel_id}")],
+        [InlineKeyboardButton(text="Заблокировать", callback_data=f"channel:blocked:{channel_id}"),
+         InlineKeyboardButton(text="Посмотреть примеры", callback_data=f"examples:{channel_id}")],
+    ])
+
+
+def job_keyboard(job_id: int, link: str | None) -> InlineKeyboardMarkup:
+    rows = []
+    if link:
+        rows.append([InlineKeyboardButton(text="Открыть объявление", url=link)])
+    rows.extend([
+        [InlineKeyboardButton(text="Разобрать заказ", callback_data=f"plan:{job_id}"),
+         InlineKeyboardButton(text="Подготовить отклик", callback_data=f"draft:{job_id}")],
+        [InlineKeyboardButton(text="Интересно", callback_data=f"feedback:interesting:{job_id}"),
+         InlineKeyboardButton(text="Не подходит", callback_data=f"feedback:irrelevant:{job_id}")],
+        [InlineKeyboardButton(text="Откликнулся", callback_data=f"feedback:applied:{job_id}"),
+         InlineKeyboardButton(text="Получил заказ", callback_data=f"feedback:won:{job_id}")],
+    ])
+    return InlineKeyboardMarkup(inline_keyboard=rows)
+
+
+async def health_text(service) -> str:
+    lines = ["Проверка бота", "Бот отвечает: да"]
+    problems = []
+    try:
+        stats = service.repo.stats()
+        activity = service.repo.health_activity()
+        pending = len(service.repo.pending_messages())
+        lines.append(f"База данных: работает; одобренных каналов: {stats['approved']}; объявлений в очереди: {pending}")
+        lines.append(f"За 24 часа: прочитано сообщений {activity['messages']}, отправлено уведомлений {activity['notifications']}")
+        if activity["last_notification"]:
+            sent = activity["last_notification"].astimezone(ZoneInfo("Asia/Yekaterinburg")).strftime("%d.%m %H:%M")
+            lines.append(f"Последнее уведомление: {sent} (Екб)")
+        if not stats["approved"]:
+            problems.append("Нет одобренных каналов для мониторинга")
+    except Exception as exc:
+        log.exception("Проверка базы данных")
+        problems.append(f"База данных: ошибка {type(exc).__name__}")
+
+    try:
+        connected = service.source.client.is_connected()
+        lines.append(f"Чтение Telegram-каналов: {'подключено' if connected else 'отключено'}")
+        if not connected:
+            problems.append("Сессия Telegram для чтения каналов отключена")
+    except Exception as exc:
+        log.exception("Проверка сессии Telegram")
+        problems.append(f"Сессия Telegram: ошибка {type(exc).__name__}")
+
+    started = service.last_monitor_started
+    if started is None:
+        lines.append("Мониторинг: после запуска ещё не выполнялся")
+        problems.append("Мониторинг ещё не запускался")
+    else:
+        local_time = started.astimezone(ZoneInfo("Asia/Yekaterinburg")).strftime("%d.%m %H:%M")
+        running = service.monitor_lock.locked()
+        lines.append(f"Мониторинг: {'идёт сейчас' if running else 'последний запуск'} {local_time} (Екб)")
+        if not running and (datetime.now(timezone.utc) - started).total_seconds() > 25 * 60:
+            problems.append("Мониторинг не запускался более 25 минут")
+        if service.last_monitor_errors:
+            errors = service.last_monitor_errors
+            problems.append(f"Ошибки последнего прохода ({len(errors)}): " + "; ".join(errors[:3]))
+
+    try:
+        ai_ok, ai_detail = await service.ai.check_health()
+        lines.append("OpenRouter: " + ai_detail)
+        if not ai_ok:
+            problems.append("Проверка ИИ не прошла")
+        lines.append(f"Расход по учёту бота сегодня: ${service.repo.cost_today():.4f}")
+    except Exception as exc:
+        log.exception("Проверка OpenRouter")
+        problems.append(f"Проверка OpenRouter: ошибка {type(exc).__name__}")
+
+    lines.append("Итог: " + ("обнаружены проблемы" if problems else "основные проверки прошли"))
+    lines.extend("• " + problem for problem in problems)
+    return "\n".join(lines)
+
+
+class OwnerMiddleware(BaseMiddleware):
+    def __init__(self, owner_id: int):
+        self.owner_id = owner_id
+
+    async def __call__(self, handler, event, data):
+        user = getattr(event, "from_user", None)
+        if user is None or user.id != self.owner_id:
+            if isinstance(event, CallbackQuery):
+                await event.answer("Доступ запрещён", show_alert=True)
+            elif isinstance(event, Message):
+                await event.answer("Доступ запрещён")
+            return None
+        return await handler(event, data)
+
+
+def create_router(service) -> Router:
+    router = Router()
+    router.message.middleware(OwnerMiddleware(service.owner_id))
+    router.callback_query.middleware(OwnerMiddleware(service.owner_id))
+    repo = service.repo
+    def settings_text() -> str:
+        return "Уведомления: все подходящие IT-варианты сразу, без порога рейтинга"
+
+    async def add_channels(message: Message, raw: str) -> None:
+        try:
+            usernames = parse_channel_list(raw)
+        except ValueError as exc:
+            await message.answer(f"{exc}. Пример: @channel_name")
+            return
+        results = []
+        for username in usernames:
+            try:
+                channel = await service.add_channel("@" + username)
+                results.append(f"@{username}: проверьте карточку и нажмите «Добавить»" if channel
+                               else f"@{username}: канал уже известен")
+            except Exception as exc:
+                log.exception("Ручное добавление канала %s", username)
+                results.append(f"@{username}: не удалось добавить ({type(exc).__name__})")
+        await message.answer("\n".join(results)[:4000])
+
+    @router.message(Command("start"))
+    async def start(message: Message):
+        await message.answer("Выберите действие на кнопках ниже.", reply_markup=main_menu())
+
+    @router.message(Command("menu"))
+    async def menu(message: Message):
+        await message.answer("Главное меню", reply_markup=main_menu())
+
+    @router.message(Command("status"))
+    async def status(message: Message):
+        stats = repo.stats()
+        telegram_status = "подключён" if service.source.client.is_connected() else "отключён"
+        await message.answer(f"Источники: {stats['approved']} · кандидаты: {stats['pending']}\n"
+                             "Поиск каналов и публикаций: выключен\nМониторинг: каждые 10 минут\n"
+                             "Присылаю: разовые IT-заказы и IT-работу/подработку с явным вайбкодингом\n"
+                             "Уведомления: без порога рейтинга\n"
+                             f"OpenRouter: {service.ai.last_status}, модель {service.ai.model}, учтено сегодня ${repo.cost_today():.4f}\n"
+                             f"Telegram: {telegram_status}")
+
+    @router.message(Command("check"))
+    async def check(message: Message):
+        await message.answer(await health_text(service))
+
+    @router.message(Command("sources"))
+    async def sources(message: Message):
+        channels = repo.list_channels("approved")
+        if not channels:
+            await message.answer("Одобренных каналов нет")
+            return
+        parts = (message.text or "").split()
+        try:
+            page = max(1, int(parts[1])) if len(parts) > 1 else 1
+        except ValueError:
+            page = 1
+        selected = channels[(page - 1) * 50:page * 50]
+        await message.answer((f"Источники: страница {page} из {(len(channels) + 49) // 50}\n" +
+                              "\n".join(f"{c.id}. {c.title} · @{c.username}" for c in selected))[:4000]
+                             if selected else "На этой странице нет каналов")
+
+    @router.message(Command("pending"))
+    async def pending(message: Message):
+        channels = repo.list_channels("pending")
+        if not channels:
+            await message.answer("Нет каналов на подтверждении")
+            return
+        parts = (message.text or "").split()
+        try:
+            page = max(1, int(parts[1])) if len(parts) > 1 else 1
+        except ValueError:
+            page = 1
+        selected = channels[(page - 1) * 20:page * 20]
+        if not selected:
+            await message.answer("На этой странице нет каналов")
+            return
+        await message.answer(f"Кандидаты: страница {page} из {(len(channels) + 19) // 20}. Следующая: /pending {page + 1}")
+        for channel in selected:
+            candidate = repo.get_candidate(channel.id)
+            if candidate and not candidate.owner_notified:
+                await service.notify_candidate(channel)
+            else:
+                await message.answer(f"{channel.title} · @{channel.username}", reply_markup=candidate_keyboard(channel.id))
+
+    @router.message(Command("add"))
+    async def add(message: Message):
+        parts = (message.text or "").split(maxsplit=1)
+        if len(parts) != 2:
+            await message.answer("Пример: /add @channel_name или /add @first @second")
+            return
+        await add_channels(message, parts[1])
+
+    @router.message(Command("latest"))
+    async def latest(message: Message):
+        jobs = repo.jobs()
+        await message.answer("\n".join(f"#{j.id} · {j.score} · {j.title}" for j in jobs)[:4000] or "Заказов пока нет")
+
+    @router.message(Command("top"))
+    async def top(message: Message):
+        jobs = sorted(repo.jobs(60, 50), key=lambda item: item.score or 0, reverse=True)[:10]
+        await message.answer("\n".join(f"#{j.id} · {j.score} · {j.title}" for j in jobs)[:4000] or "Подходящих заказов пока нет")
+
+    @router.message(Command("stats"))
+    async def stats(message: Message):
+        values = repo.stats()
+        await message.answer("\n".join(f"{key}: {value}" for key, value in values.items()))
+
+    @router.message(Command("settings"))
+    async def settings(message: Message):
+        await message.answer(settings_text())
+
+    @router.message(F.text.in_(MENU_ACTIONS))
+    async def menu_action(message: Message):
+        action = MENU_ACTIONS[message.text]
+        if action == "add":
+            await message.answer("Пришлите @имя канала или ссылку t.me. Можно несколько через пробел.")
+            return
+        handlers = {"sources": sources, "pending": pending,
+                    "latest": latest, "top": top, "status": status, "check": check,
+                    "stats": stats, "settings": settings}
+        await handlers[action](message)
+
+    @router.message()
+    async def channel_list(message: Message):
+        raw = (message.text or "").strip()
+        if raw.startswith("@") or raw.startswith("https://t.me/"):
+            await add_channels(message, raw)
+
+    @router.callback_query()
+    async def callbacks(callback: CallbackQuery):
+        parts = (callback.data or "").split(":")
+        try:
+            if len(parts) == 3 and parts[0] == "settings":
+                await callback.answer("Порог отключён: присылаются все подходящие IT-варианты", show_alert=True)
+                return
+            if len(parts) == 3 and parts[0] == "channel":
+                channel_id = int(parts[2])
+                initial_cursor = 0
+                if parts[1] == "approved":
+                    channel = repo.get_channel(channel_id)
+                    if channel is None or channel.status != "pending":
+                        await callback.answer("Канал уже обработан", show_alert=True)
+                        return
+                    initial_cursor = await service.source.latest_message_id(channel)
+                changed = repo.transition_channel(channel_id, parts[1], initial_cursor)
+                await callback.answer("Статус обновлён" if changed else "Канал уже обработан", show_alert=not changed)
+                return
+            if len(parts) == 2 and parts[0] == "examples":
+                candidate = repo.get_candidate(int(parts[1]))
+                examples = candidate.examples if candidate else []
+                await callback.message.answer("\n\n".join(examples)[:4000] or "Примеры не найдены")
+                await callback.answer()
+                return
+            if len(parts) == 3 and parts[0] == "feedback" and parts[1] in {"interesting", "irrelevant", "applied", "won"}:
+                repo.add_feedback(int(parts[2]), parts[1])
+                await callback.answer("Сохранено")
+                return
+            if len(parts) == 2 and parts[0] in {"plan", "draft"}:
+                job_id = int(parts[1])
+                original = repo.job_original(job_id)
+                if original is None:
+                    await callback.answer("Заказ не найден", show_alert=True)
+                    return
+                await callback.answer("Готовлю ответ")
+                result = await service.ai.ask(parts[0], original)
+                text = "\n".join(result["plan"] + ["Вопросы:"] + result.get("questions", [])) if parts[0] == "plan" else result["draft"]
+                await callback.message.answer(text[:4000])
+                return
+        except Exception:
+            log.exception("Действие кнопки")
+            await callback.answer("Не удалось выполнить действие; попробуйте позже", show_alert=True)
+            return
+        await callback.answer("Неизвестное действие", show_alert=True)
+
+    return router
