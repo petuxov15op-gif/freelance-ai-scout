@@ -32,6 +32,7 @@ MENU_LABELS = {
     "settings": "⚙️ Настройки",
 }
 ADD_CHANNEL_LABEL = "➕ Добавить канал"
+BACK_LABEL = "← Назад"
 
 # Keep accepting taps from keyboards sent before the menu update.
 MENU_ACTIONS = {
@@ -57,12 +58,12 @@ def main_menu() -> ReplyKeyboardMarkup:
     )
 
 
-def section_menu(section: str) -> InlineKeyboardMarkup:
-    actions = MENU_SECTIONS[section]
-    return InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text=MENU_LABELS[action], callback_data=f"menu:{action}")]
-        for action in actions
-    ])
+def section_menu(section: str) -> ReplyKeyboardMarkup:
+    labels = [MENU_LABELS[action] for action in MENU_SECTIONS[section]]
+    rows = [[KeyboardButton(text=label) for label in labels[i:i + 2]]
+            for i in range(0, len(labels), 2)]
+    rows.append([KeyboardButton(text=BACK_LABEL)])
+    return ReplyKeyboardMarkup(keyboard=rows, resize_keyboard=True, is_persistent=True)
 
 
 def bot_commands() -> list[BotCommand]:
@@ -339,15 +340,21 @@ def create_router(service) -> Router:
             await message.answer(f"Поиск завершён. Новых чатов на рассмотрение: {found}."
                                  + (f" Ошибок при проверке: {errors}." if errors else ""))
 
-    @router.message(F.text.in_({*MENU_SECTIONS, ADD_CHANNEL_LABEL, *MENU_ACTIONS}))
+    @router.message(F.text.in_({*MENU_SECTIONS, ADD_CHANNEL_LABEL, BACK_LABEL,
+                                *MENU_LABELS.values(), *MENU_ACTIONS}))
     async def menu_action(message: Message):
         if message.text in MENU_SECTIONS:
             await message.answer(message.text, reply_markup=section_menu(message.text))
             return
+        if message.text == BACK_LABEL:
+            await message.answer("Главное меню", reply_markup=main_menu())
+            return
         if message.text == ADD_CHANNEL_LABEL:
             await message.answer("Пришлите @имя канала или ссылку t.me. Можно несколько через пробел.")
             return
-        action = MENU_ACTIONS[message.text]
+        action = next((action for action, label in MENU_LABELS.items() if label == message.text), None)
+        if action is None:
+            action = MENU_ACTIONS[message.text]
         if action == "add":
             await message.answer("Пришлите @имя канала или ссылку t.me. Можно несколько через пробел.")
             return

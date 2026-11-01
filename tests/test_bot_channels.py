@@ -24,8 +24,8 @@ def test_main_menu_groups_every_action_and_telegram_command_menu():
     labels = [button.text for row in main_menu().keyboard for button in row]
     assert labels == ["📋 Заказы", "📡 Каналы", "➕ Добавить канал", "📊 Бот"]
     assert {action for actions in MENU_SECTIONS.values() for action in actions} == set(MENU_LABELS)
-    assert [button.callback_data for row in section_menu("📡 Каналы").inline_keyboard for button in row] == [
-        "menu:sources", "menu:pending", "menu:discover"
+    assert [[button.text for button in row] for row in section_menu("📡 Каналы").keyboard] == [
+        ["📡 Источники", "🕓 Кандидаты"], ["🔎 Найти чаты сейчас"], ["← Назад"]
     ]
     assert main_menu().is_persistent is True
     assert {command.command for command in bot_commands()} >= {"menu", "sources", "add", "settings"}
@@ -42,16 +42,31 @@ async def test_manual_search_menu_button_starts_discovery_and_reports_result(rep
     service = SimpleNamespace(owner_id=1, repo=repo, discovery_lock=asyncio.Lock(),
                               discover=AsyncMock(return_value=("done", 2, 0, None)))
     router = create_router(service)
-    handler = router.callback_query.handlers[0].callback
-    message = SimpleNamespace(text="📡 Каналы", answer=AsyncMock())
-    callback = SimpleNamespace(data="menu:discover", message=message, answer=AsyncMock())
+    handler = next(item.callback for item in router.message.handlers if item.callback.__name__ == "menu_action")
+    message = SimpleNamespace(text="🔎 Найти чаты сейчас", answer=AsyncMock())
 
-    await handler(callback)
+    await handler(message)
 
-    callback.answer.assert_awaited_once_with()
     service.discover.assert_awaited_once_with()
     assert "Запускаю поиск" in message.answer.await_args_list[0].args[0]
     assert "Новых чатов на рассмотрение: 2" in message.answer.await_args_list[-1].args[0]
+
+
+@pytest.mark.asyncio
+async def test_menu_navigation_switches_reply_keyboard(repo):
+    service = SimpleNamespace(owner_id=1, repo=repo)
+    handler = next(item.callback for item in create_router(service).message.handlers
+                   if item.callback.__name__ == "menu_action")
+    message = SimpleNamespace(text="📋 Заказы", answer=AsyncMock())
+
+    await handler(message)
+    submenu = message.answer.await_args.kwargs["reply_markup"]
+    assert [[button.text for button in row] for row in submenu.keyboard] == [
+        ["📋 Последние", "⭐ Лучшие"], ["← Назад"]]
+
+    message.text = "← Назад"
+    await handler(message)
+    assert message.answer.await_args.kwargs["reply_markup"] == main_menu()
 
 
 @pytest.mark.asyncio
