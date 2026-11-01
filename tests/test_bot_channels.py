@@ -53,27 +53,25 @@ async def test_manual_search_menu_button_starts_discovery_and_reports_result(rep
 
 
 @pytest.mark.asyncio
-async def test_menu_navigation_switches_reply_keyboard_without_leaving_messages(repo, monkeypatch):
+async def test_menu_navigation_keeps_keyboard_message_and_removes_button_tap(repo):
     service = SimpleNamespace(owner_id=1, repo=repo)
     handler = next(item.callback for item in create_router(service).message.handlers
                    if item.callback.__name__ == "menu_action")
-    sent = SimpleNamespace(delete=AsyncMock())
-    message = SimpleNamespace(text="📋 Заказы", answer=AsyncMock(return_value=sent),
+    message = SimpleNamespace(text="📋 Заказы", answer=AsyncMock(),
                               delete=AsyncMock())
-    monkeypatch.setattr("scout.bot.asyncio.sleep", AsyncMock())
 
     await handler(message)
     submenu = message.answer.await_args.kwargs["reply_markup"]
     assert [[button.text for button in row] for row in submenu.keyboard] == [
         ["📋 Последние", "⭐ Лучшие"], ["← Назад"]]
+    assert message.answer.await_args.args == ("Выбери действие",)
     message.delete.assert_awaited_once_with()
-    sent.delete.assert_awaited_once_with()
 
     message.text = "← Назад"
     await handler(message)
     assert message.answer.await_args.kwargs["reply_markup"] == main_menu()
+    assert message.answer.await_args.args == ("Главное меню",)
     assert message.delete.await_count == 2
-    assert sent.delete.await_count == 2
 
 
 @pytest.mark.asyncio

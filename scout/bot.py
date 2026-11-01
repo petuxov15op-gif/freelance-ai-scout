@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import asyncio
 import logging
 from datetime import datetime, timezone
 from zoneinfo import ZoneInfo
@@ -206,18 +205,12 @@ def create_router(service) -> Router:
     def settings_text() -> str:
         return "Уведомления: все подходящие IT-варианты сразу, без порога рейтинга"
 
-    async def switch_menu(message: Message, keyboard: ReplyKeyboardMarkup) -> None:
-        sent = await message.answer("↪", reply_markup=keyboard, disable_notification=True)
+    async def switch_menu(message: Message, keyboard: ReplyKeyboardMarkup, title: str) -> None:
+        await message.answer(title, reply_markup=keyboard, disable_notification=True)
         try:
             await message.delete()
         except Exception:
             log.exception("Не удалось удалить нажатие кнопки меню")
-        # Give the Telegram client time to apply the new reply keyboard.
-        await asyncio.sleep(1)
-        try:
-            await sent.delete()
-        except Exception:
-            log.exception("Не удалось удалить служебное сообщение меню")
 
     async def add_channels(message: Message, raw: str) -> None:
         try:
@@ -358,10 +351,10 @@ def create_router(service) -> Router:
                                 *MENU_LABELS.values(), *MENU_ACTIONS}))
     async def menu_action(message: Message):
         if message.text in MENU_SECTIONS:
-            await switch_menu(message, section_menu(message.text))
+            await switch_menu(message, section_menu(message.text), "Выбери действие")
             return
         if message.text == BACK_LABEL:
-            await switch_menu(message, main_menu())
+            await switch_menu(message, main_menu(), "Главное меню")
             return
         if message.text == ADD_CHANNEL_LABEL:
             await message.answer("Пришлите @имя канала или ссылку t.me. Можно несколько через пробел.")
