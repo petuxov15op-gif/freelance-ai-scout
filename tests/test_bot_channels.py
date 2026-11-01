@@ -4,8 +4,8 @@ from datetime import datetime, timezone
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
-from scout.bot import (MENU_ACTIONS, bot_commands, candidate_digest_keyboard, create_router,
-                       health_text, main_menu, parse_channel_list)
+from scout.bot import (MENU_LABELS, MENU_SECTIONS, bot_commands, candidate_digest_keyboard,
+                       create_router, health_text, main_menu, parse_channel_list, section_menu)
 from scout.service import ScoutService
 
 
@@ -20,15 +20,19 @@ def test_channel_list_rejects_other_text():
         parse_channel_list("@job_developer hello")
 
 
-def test_main_menu_has_each_action_and_telegram_command_menu():
+def test_main_menu_groups_every_action_and_telegram_command_menu():
     labels = [button.text for row in main_menu().keyboard for button in row]
-    assert labels == list(MENU_ACTIONS)
+    assert labels == ["📋 Заказы", "📡 Каналы", "➕ Добавить канал", "📊 Бот"]
+    assert {action for actions in MENU_SECTIONS.values() for action in actions} == set(MENU_LABELS)
+    assert [button.callback_data for row in section_menu("📡 Каналы").inline_keyboard for button in row] == [
+        "menu:sources", "menu:pending", "menu:discover"
+    ]
     assert main_menu().is_persistent is True
     assert {command.command for command in bot_commands()} >= {"menu", "sources", "add", "settings"}
     assert "discover" not in {command.command for command in bot_commands()}
     assert "➕ Добавить канал" in labels
-    assert "🔎 Найти чаты сейчас" in labels
-    assert "🩺 Проверить" in labels
+    assert "🔎 Найти чаты сейчас" in MENU_LABELS.values()
+    assert "🩺 Проверить" in MENU_LABELS.values()
     assert "check" in {command.command for command in bot_commands()}
     assert all("Поиск каналов" not in label for label in labels)
 
@@ -38,11 +42,13 @@ async def test_manual_search_menu_button_starts_discovery_and_reports_result(rep
     service = SimpleNamespace(owner_id=1, repo=repo, discovery_lock=asyncio.Lock(),
                               discover=AsyncMock(return_value=("done", 2, 0, None)))
     router = create_router(service)
-    handler = next(item.callback for item in router.message.handlers if item.callback.__name__ == "menu_action")
-    message = SimpleNamespace(text="🔎 Найти чаты сейчас", answer=AsyncMock())
+    handler = router.callback_query.handlers[0].callback
+    message = SimpleNamespace(text="📡 Каналы", answer=AsyncMock())
+    callback = SimpleNamespace(data="menu:discover", message=message, answer=AsyncMock())
 
-    await handler(message)
+    await handler(callback)
 
+    callback.answer.assert_awaited_once_with()
     service.discover.assert_awaited_once_with()
     assert "Запускаю поиск" in message.answer.await_args_list[0].args[0]
     assert "Новых чатов на рассмотрение: 2" in message.answer.await_args_list[-1].args[0]

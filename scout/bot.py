@@ -15,6 +15,25 @@ from .telegram import parse_public_channel
 
 log = logging.getLogger(__name__)
 
+MENU_SECTIONS = {
+    "📋 Заказы": ("latest", "top"),
+    "📡 Каналы": ("sources", "pending", "discover"),
+    "📊 Бот": ("status", "check", "stats", "settings"),
+}
+MENU_LABELS = {
+    "latest": "📋 Последние",
+    "top": "⭐ Лучшие",
+    "sources": "📡 Источники",
+    "pending": "🕓 Кандидаты",
+    "discover": "🔎 Найти чаты сейчас",
+    "status": "📊 Статус",
+    "check": "🩺 Проверить",
+    "stats": "📈 Статистика",
+    "settings": "⚙️ Настройки",
+}
+ADD_CHANNEL_LABEL = "➕ Добавить канал"
+
+# Keep accepting taps from keyboards sent before the menu update.
 MENU_ACTIONS = {
     "📡 Источники": "sources",
     "🕓 Кандидаты": "pending",
@@ -30,12 +49,20 @@ MENU_ACTIONS = {
 
 
 def main_menu() -> ReplyKeyboardMarkup:
-    labels = list(MENU_ACTIONS)
+    labels = ["📋 Заказы", "📡 Каналы", ADD_CHANNEL_LABEL, "📊 Бот"]
     return ReplyKeyboardMarkup(
         keyboard=[[KeyboardButton(text=label) for label in labels[i:i + 2]]
                   for i in range(0, len(labels), 2)],
         resize_keyboard=True, is_persistent=True,
     )
+
+
+def section_menu(section: str) -> InlineKeyboardMarkup:
+    actions = MENU_SECTIONS[section]
+    return InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text=MENU_LABELS[action], callback_data=f"menu:{action}")]
+        for action in actions
+    ])
 
 
 def bot_commands() -> list[BotCommand]:
@@ -312,8 +339,14 @@ def create_router(service) -> Router:
             await message.answer(f"Поиск завершён. Новых чатов на рассмотрение: {found}."
                                  + (f" Ошибок при проверке: {errors}." if errors else ""))
 
-    @router.message(F.text.in_(MENU_ACTIONS))
+    @router.message(F.text.in_({*MENU_SECTIONS, ADD_CHANNEL_LABEL, *MENU_ACTIONS}))
     async def menu_action(message: Message):
+        if message.text in MENU_SECTIONS:
+            await message.answer(message.text, reply_markup=section_menu(message.text))
+            return
+        if message.text == ADD_CHANNEL_LABEL:
+            await message.answer("Пришлите @имя канала или ссылку t.me. Можно несколько через пробел.")
+            return
         action = MENU_ACTIONS[message.text]
         if action == "add":
             await message.answer("Пришлите @имя канала или ссылку t.me. Можно несколько через пробел.")
@@ -333,6 +366,14 @@ def create_router(service) -> Router:
     async def callbacks(callback: CallbackQuery):
         parts = (callback.data or "").split(":")
         try:
+            if len(parts) == 2 and parts[0] == "menu" and parts[1] in MENU_LABELS:
+                action = parts[1]
+                await callback.answer()
+                handlers = {"sources": sources, "pending": pending, "latest": latest,
+                            "top": top, "status": status, "check": check,
+                            "discover": discover, "stats": stats, "settings": settings}
+                await handlers[action](callback.message)
+                return
             if len(parts) == 3 and parts[0] == "settings":
                 await callback.answer("Порог отключён: присылаются все подходящие IT-варианты", show_alert=True)
                 return
