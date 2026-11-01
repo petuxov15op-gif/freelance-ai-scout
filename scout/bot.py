@@ -9,6 +9,7 @@ from aiogram.filters import Command
 from aiogram.types import (BotCommand, CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup,
                            KeyboardButton, Message, ReplyKeyboardMarkup)
 
+from .core import mentions_kwork
 from .service import JOB_STATUS_LABELS, job_text
 from .telegram import parse_public_channel
 
@@ -188,6 +189,8 @@ def create_router(service) -> Router:
                 channel = await service.add_channel("@" + username)
                 results.append(f"@{username}: проверьте карточку и нажмите «Добавить»" if channel
                                else f"@{username}: канал уже известен")
+            except ValueError as exc:
+                results.append(f"@{username}: {exc}")
             except Exception as exc:
                 log.exception("Ручное добавление канала %s", username)
                 results.append(f"@{username}: не удалось добавить ({type(exc).__name__})")
@@ -234,7 +237,12 @@ def create_router(service) -> Router:
 
     @router.message(Command("pending"))
     async def pending(message: Message):
-        channels = repo.list_channels("pending")
+        channels = []
+        for channel in repo.list_channels("pending"):
+            candidate = repo.get_candidate(channel.id)
+            if not mentions_kwork(" ".join((channel.title or "", channel.description or "",
+                                            *(candidate.examples if candidate else [])))):
+                channels.append(channel)
         if not channels:
             await message.answer("Нет каналов на подтверждении")
             return

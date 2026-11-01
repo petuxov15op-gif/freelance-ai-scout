@@ -316,6 +316,20 @@ async def test_manual_channel_can_be_reviewed_when_ai_finds_no_fit(repo):
 
 
 @pytest.mark.asyncio
+async def test_manual_kwork_channel_is_not_offered(repo):
+    class KworkSource(FakeSource):
+        async def inspect(self, entity):
+            return ["Нужен сайт, отклик через Кворк"], True, 0.0
+
+    bot = SimpleNamespace(send_message=AsyncMock())
+    service = ScoutService(repo, KworkSource(), FakeAI(), bot, 1)
+    with pytest.raises(ValueError, match="Kwork"):
+        await service.add_channel("@scoutjobs")
+    assert repo.list_channels("pending") == []
+    bot.send_message.assert_not_awaited()
+
+
+@pytest.mark.asyncio
 async def test_discovery_suggests_recent_development_chats_across_queries(repo):
     class DiscoverySource(FakeSource):
         def __init__(self):
@@ -356,6 +370,59 @@ async def test_discovery_suggests_recent_development_chats_across_queries(repo):
     assert len(source.searches) == len(DISCOVERY_QUERIES)
     assert [channel.username for channel in repo.list_channels("pending")] == ["jobs00001"]
     bot.send_message.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_discovery_excludes_kwork_and_prioritizes_direct_contact(repo):
+    class DiscoverySource(FakeSource):
+        async def post_search_quota(self, query):
+            return SimpleNamespace(remains=0, query_is_free=True, wait_till=None)
+
+        async def search_public_posts(self, query):
+            return []
+
+        async def search_public_chats(self, query, limit=30):
+            return [SimpleNamespace(id=i, username=f"jobs{i:05}", title=title)
+                    for i, title in ((1, "Обычные заказы"), (2, "Заказы через Кворк"),
+                                     (3, "Прямые заказы"), (4, "Разработка"))]
+
+        async def inspect(self, entity, max_age_days=30):
+            examples = {
+                1: "Нужен разработчик сайта, бюджет 10000 рублей, подробности в канале",
+                2: "Нужен разработчик сайта, отклик через Kwork.ru/task/123",
+                3: "Нужен разработчик Python для API, пишите заказчику @client12345",
+                4: "Нужен разработчик бота, заявку подать на кворке",
+            }
+            return [examples[entity.id]], True, 0.0
+
+    ai = SimpleNamespace(ask=AsyncMock(return_value={"suitable": True}))
+    bot = SimpleNamespace(send_message=AsyncMock(return_value=SimpleNamespace(message_id=1)))
+    service = ScoutService(repo, DiscoverySource(), ai, bot, 1)
+    assert (await service.discover())[:3] == ("done", 2, 0)
+    candidates = repo.list_channels("pending")
+    assert {channel.username for channel in candidates} == {"jobs00001", "jobs00003"}
+    assert repo.get_candidate(next(c.id for c in candidates if c.username == "jobs00003")).usefulness == 80
+    digest = bot.send_message.await_args.args[1]
+    assert digest.index("Прямые заказы") < digest.index("Обычные заказы")
+
+
+@pytest.mark.asyncio
+async def test_monitor_does_not_notify_kwork_post(repo):
+    channel = repo.candidate(100, "scoutjobs", "Jobs", "", None, 70, "", [])
+    repo.transition_channel(channel.id, "approved")
+
+    class KworkSource(FakeSource):
+        async def messages(self, channel, min_id):
+            yield SimpleNamespace(id=1, raw_text="Нужен сайт для компании, отклик через Kwork.ru",
+                                  date=datetime.now(timezone.utc), media=None, fwd_from=None)
+
+    bot = SimpleNamespace(send_message=AsyncMock())
+    ai = SimpleNamespace(ask=AsyncMock())
+    service = ScoutService(repo, KworkSource(), ai, bot, 1)
+    await service.monitor()
+    assert repo.stats()["jobs"] == 0
+    ai.ask.assert_not_awaited()
+    bot.send_message.assert_not_awaited()
 
 
 @pytest.mark.asyncio

@@ -12,6 +12,16 @@ def normalize_text(value: str) -> str:
     return " ".join(value.split())
 
 
+def mentions_kwork(value: str) -> bool:
+    return bool(re.search(r"(?<!\w)(?:kwork|кворк)\w*", value, re.IGNORECASE))
+
+
+def has_direct_contact(value: str) -> bool:
+    contact = r"(?:@[A-Za-z][A-Za-z0-9_]{4,31}\b|(?:https?://)?t\.me/[A-Za-z][A-Za-z0-9_]{4,31}\b)"
+    invitation = r"(?:пишите|писать|напишите|обращайтесь|связь|контакт|заказчик|в\s+лс|в\s+личк\w*|dm\b|contact\b)"
+    return bool(re.search(rf"(?:{invitation}).{{0,80}}{contact}|{contact}.{{0,80}}(?:{invitation})", value, re.IGNORECASE))
+
+
 def text_hash(value: str) -> str:
     return hashlib.sha256(normalize_text(value).encode()).hexdigest()
 
