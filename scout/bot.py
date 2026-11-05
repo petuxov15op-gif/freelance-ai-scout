@@ -169,13 +169,15 @@ async def health_text(service) -> str:
 
     try:
         ai_ok, ai_detail = await service.ai.check_health()
-        lines.append("OpenRouter: " + ai_detail)
+        label = "OpenRouter" if getattr(service.ai, "provider", "openrouter") == "openrouter" else "Сторонний API"
+        lines.append(label + ": " + ai_detail)
         if not ai_ok:
             problems.append("Проверка ИИ не прошла")
-        lines.append(f"Расход по учёту бота сегодня: ${service.repo.cost_today():.4f}")
+        if getattr(service.ai, "provider", "openrouter") == "openrouter":
+            lines.append(f"Расход по учёту бота сегодня: ${service.repo.cost_today():.4f}")
     except Exception as exc:
-        log.exception("Проверка OpenRouter")
-        problems.append(f"Проверка OpenRouter: ошибка {type(exc).__name__}")
+        log.exception("Проверка ИИ")
+        problems.append(f"Проверка ИИ: ошибка {type(exc).__name__}")
 
     lines.append("Итог: " + ("обнаружены проблемы" if problems else "основные проверки прошли"))
     lines.extend("• " + problem for problem in problems)
@@ -243,11 +245,14 @@ def create_router(service) -> Router:
     async def status(message: Message):
         stats = repo.stats()
         telegram_status = "подключён" if service.source.client.is_connected() else "отключён"
+        provider_status = (f"OpenRouter: {service.ai.last_status}, модель {service.ai.model}, учтено сегодня ${repo.cost_today():.4f}"
+                           if service.ai.provider == "openrouter" else
+                           f"Сторонний API: {service.ai.last_status}, модель {service.ai.model}; остаток и расходы смотри у продавца")
         await message.answer(f"Источники: {stats['approved']} · кандидаты: {stats['pending']}\n"
                              "Поиск новых чатов: по бесплатному лимиту Telegram\nМониторинг: каждые 10 минут\n"
                              "Присылаю: разовые IT-заказы и IT-работу/подработку с явным вайбкодингом\n"
                              "Уведомления: без порога рейтинга\n"
-                             f"OpenRouter: {service.ai.last_status}, модель {service.ai.model}, учтено сегодня ${repo.cost_today():.4f}\n"
+                             f"{provider_status}\n"
                              f"Telegram: {telegram_status}")
 
     @router.message(Command("check"))

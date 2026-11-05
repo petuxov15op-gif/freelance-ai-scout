@@ -97,3 +97,24 @@ async def test_health_check_does_not_call_model_after_key_limit(repo):
         assert "Лимит расходов" in detail
     finally:
         await ai.close()
+
+
+@pytest.mark.asyncio
+async def test_alternate_provider_keeps_openrouter_fields_out(repo):
+    def respond(request):
+        assert request.url.host == "example.test"
+        assert request.url.path == "/v1/chat/completions"
+        payload = json.loads(request.content)
+        assert payload["model"] == "claude-opus-5-5"
+        assert payload["response_format"] == {"type": "json_object"}
+        assert "provider" not in payload and "usage" not in payload
+        return httpx.Response(200, json={"choices": [{"message": {"content": '{"suitable": true, "reason": "да"}'}}]})
+
+    ai = OpenRouter("alternate-key", "claude-opus-5-5", repo, 1,
+                    provider="compatible", base_url="https://example.test/v1")
+    await ai.client.aclose()
+    ai.client = httpx.AsyncClient(transport=httpx.MockTransport(respond), base_url="https://example.test/v1")
+    try:
+        assert (await ai.ask("candidate", "Нужен бот"))["suitable"]
+    finally:
+        await ai.close()

@@ -34,8 +34,13 @@ async def run() -> None:
     repo.seed()
     source = TelegramSource(config.telegram_api_id, config.telegram_api_hash, config.session_path, config.telegram_phone)
     bot = Bot(config.bot_token)
-    ai = OpenRouter(config.openrouter_api_key, config.openrouter_model, repo, config.daily_cost_limit_usd,
-                    config.ai_concurrency, config.openrouter_proxy_url)
+    ai = OpenRouter(
+        config.openrouter_api_key if config.ai_provider == "openrouter" else config.alternate_api_key,
+        config.openrouter_model if config.ai_provider == "openrouter" else config.alternate_model,
+        repo, config.daily_cost_limit_usd, config.ai_concurrency,
+        config.openrouter_proxy_url if config.ai_provider == "openrouter" else "",
+        provider=config.ai_provider, base_url=config.alternate_api_base_url,
+    )
     service = ScoutService(repo, source, ai, bot, config.owner_id)
     dispatcher = Dispatcher()
     dispatcher.include_router(create_router(service))

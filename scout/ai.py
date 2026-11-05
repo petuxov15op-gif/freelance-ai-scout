@@ -62,13 +62,14 @@ def validate_response(data: Any, kind: str) -> dict:
 
 class OpenRouter:
     def __init__(self, api_key: str, model: str, repository, daily_limit: float, concurrency: int = 2,
-                 proxy_url: str = ""):
+                 proxy_url: str = "", provider: str = "openrouter", base_url: str = ""):
         self.api_key = api_key
         self.model = model
+        self.provider = provider
         self.repo = repository
         self.daily_limit = daily_limit
         self.semaphore = asyncio.Semaphore(concurrency)
-        self.client = httpx.AsyncClient(base_url="https://openrouter.ai/api/v1", timeout=45,
+        self.client = httpx.AsyncClient(base_url=base_url if provider == "compatible" else "https://openrouter.ai/api/v1", timeout=45,
                                         proxy=proxy_url or None)
         self.last_status = "не проверен"
 
@@ -80,6 +81,15 @@ class OpenRouter:
         headers = {"Authorization": "Bearer " + self.api_key}
         async with self.semaphore:
             try:
+                if self.provider == "compatible":
+                    response = await self.client.post("/chat/completions", headers=headers, timeout=25, json={
+                        "model": self.model, "messages": [{"role": "user", "content": "Ответь OK."}], "max_tokens": 8,
+                    })
+                    if response.status_code != 200:
+                        return False, f"Сторонний API ответил HTTP {response.status_code}"
+                    if not response.json().get("choices"):
+                        return False, "Сторонний API ответил без результата модели"
+                    return True, "Ключ и модель отвечают. Расходы стороннего API бот в долларах не контролирует."
                 key = await self.client.get("/key", headers=headers, timeout=15)
                 if key.status_code != 200:
                     return False, self._health_http_error(key)
@@ -145,8 +155,12 @@ class OpenRouter:
                                 {"role": "user", "content": "<announcement>\n" + text[:12000] + "\n</announcement>"}],
                    "response_format": {"type": "json_schema", "json_schema": {"name": kind, "strict": True, "schema": schemas[kind]}},
                    "provider": {"require_parameters": True}, "usage": {"include": True}}
+        if self.provider == "compatible":
+            payload.pop("provider")
+            payload.pop("usage")
+            payload["response_format"] = {"type": "json_object"}
         async with self.semaphore:
-            if self.repo.cost_today() >= self.daily_limit:
+            if self.provider == "openrouter" and self.repo.cost_today() >= self.daily_limit:
                 self.last_status = "дневной лимит достигнут"
                 raise RuntimeError("Дневной лимит расходов OpenRouter достигнут")
             for attempt in range(3):
