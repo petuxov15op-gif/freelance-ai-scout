@@ -34,6 +34,7 @@ class Config:
     session_path: str
     daily_cost_limit_usd: float
     ai_concurrency: int
+    discovery_enabled: bool
     log_level: str
 
     @classmethod
@@ -67,5 +68,6 @@ class Config:
             session_path=str(Path(os.getenv("SESSION_PATH", "~/.local/share/freelance-ai-scout/telegram_user")).expanduser()),
             daily_cost_limit_usd=float(os.getenv("DAILY_COST_LIMIT_USD", "1")),
             ai_concurrency=max(1, int(os.getenv("AI_CONCURRENCY", "2"))),
+            discovery_enabled=os.getenv("DISCOVERY_ENABLED", "false").strip().lower() in {"1", "true", "yes"},
             log_level=os.getenv("LOG_LEVEL", "INFO"),
         )

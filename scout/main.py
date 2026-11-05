@@ -67,9 +67,10 @@ async def run() -> None:
         except Exception:
             logging.exception("Не удалось обновить меню бота")
         scheduler.start()
-        logging.info("Мониторинг каждые 10 минут; поиск новых чатов до исчерпания бесплатного лимита Telegram")
+        logging.info("Мониторинг каждые 10 минут; автоматический поиск чатов: %s", config.discovery_enabled)
         initial_monitor = asyncio.create_task(service.monitor())
-        discovery_task = asyncio.create_task(discovery_loop())
+        if config.discovery_enabled:
+            discovery_task = asyncio.create_task(discovery_loop())
         await dispatcher.start_polling(bot, handle_signals=True)
     finally:
         for task in (initial_monitor, discovery_task):
