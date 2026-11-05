@@ -12,8 +12,19 @@ def normalize_text(value: str) -> str:
     return " ".join(value.split())
 
 
-def mentions_kwork(value: str) -> bool:
-    return bool(re.search(r"(?<!\w)(?:kwork|кворк)\w*", value, re.IGNORECASE))
+def mentions_platform(value: str) -> bool:
+    return bool(re.search(
+        r"(?<![A-Za-zА-Яа-я0-9])(?:kwork|кворк\w*|fl\.ru|freelancehunt(?:\.com)?|"
+        r"freelancer\.com|weblancer(?:\.net)?|workzilla(?:\.com)?)(?![A-Za-zА-Яа-я0-9])",
+        value, re.IGNORECASE))
+
+
+def platform_only_post(value: str) -> bool:
+    if has_direct_contact(value):
+        return False
+    return (mentions_platform(value) or bool(re.search(
+        r"(?:отклик(?:нуться)?|заявк\w*|писать|пишите)\s+(?:только\s+)?"
+        r"(?:через|на|в)\s+(?:бирж\w*|площадк\w*)", value, re.IGNORECASE)))
 
 
 def has_direct_contact(value: str) -> bool:

@@ -190,6 +190,11 @@ class Repository:
         with self.factory() as db:
             return db.scalar(select(Message.text).join(JobSource).where(JobSource.job_id == job_id).limit(1))
 
+    def job_channel(self, job_id: int) -> Channel | None:
+        with self.factory() as db:
+            return db.scalar(select(Channel).join(Message).join(JobSource)
+                             .where(JobSource.job_id == job_id).limit(1))
+
     def jobs(self, minimum_score: int = 0, limit: int = 10) -> list[Job]:
         with self.factory() as db:
             return list(db.scalars(select(Job).where(Job.score >= minimum_score).order_by(Job.created_at.desc()).limit(limit)))

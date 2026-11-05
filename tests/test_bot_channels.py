@@ -25,7 +25,7 @@ def test_main_menu_groups_every_action_and_telegram_command_menu():
     assert labels == ["📋 Заказы", "📡 Каналы", "➕ Добавить канал", "📊 Бот"]
     assert {action for actions in MENU_SECTIONS.values() for action in actions} == set(MENU_LABELS)
     assert [[button.text for button in row] for row in section_menu("📡 Каналы").keyboard] == [
-        ["📡 Источники", "🕓 Кандидаты"], ["🔎 Найти чаты сейчас"], ["← Назад"]
+        ["📡 Источники", "🕓 Кандидаты"], ["🔎 Найти чаты сейчас", "🏪 Площадки"], ["← Назад"]
     ]
     assert main_menu().is_persistent is True
     assert {command.command for command in bot_commands()} >= {"menu", "sources", "add", "settings"}
@@ -50,6 +50,22 @@ async def test_manual_search_menu_button_starts_discovery_and_reports_result(rep
     service.discover.assert_awaited_once_with()
     assert "Запускаю поиск" in message.answer.await_args_list[0].args[0]
     assert "Новых чатов на рассмотрение: 2" in message.answer.await_args_list[-1].args[0]
+
+
+@pytest.mark.asyncio
+async def test_platform_menu_toggles_persisted_setting(repo):
+    service = SimpleNamespace(owner_id=1, repo=repo,
+                              platforms_enabled=lambda: repo.setting("platform_sources_enabled", "false") == "true")
+    router = create_router(service)
+    menu_handler = next(item.callback for item in router.message.handlers if item.callback.__name__ == "menu_action")
+    callback_handler = router.callback_query.handlers[0].callback
+    message = SimpleNamespace(text="🏪 Площадки", answer=AsyncMock())
+    await menu_handler(message)
+    assert "на паузе" in message.answer.await_args.args[0]
+    callback = SimpleNamespace(data="platforms:on", message=message, answer=AsyncMock())
+    await callback_handler(callback)
+    assert repo.setting("platform_sources_enabled") == "true"
+    assert "включены" in message.answer.await_args.args[0]
 
 
 @pytest.mark.asyncio

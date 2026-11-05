@@ -316,17 +316,24 @@ async def test_manual_channel_can_be_reviewed_when_ai_finds_no_fit(repo):
 
 
 @pytest.mark.asyncio
-async def test_manual_kwork_channel_is_not_offered(repo):
+async def test_manual_kwork_channel_is_paused_until_enabled(repo):
     class KworkSource(FakeSource):
+        async def resolve(self, username):
+            return SimpleNamespace(id=100, username=username, title="Заказы Kwork", broadcast=True)
+
         async def inspect(self, entity):
             return ["Нужен сайт, отклик через Кворк"], True, 0.0
 
     bot = SimpleNamespace(send_message=AsyncMock())
-    service = ScoutService(repo, KworkSource(), FakeAI(), bot, 1)
-    with pytest.raises(ValueError, match="Kwork"):
-        await service.add_channel("@scoutjobs")
-    assert repo.list_channels("pending") == []
+    service = ScoutService(repo, KworkSource(),
+                           SimpleNamespace(ask=AsyncMock(return_value={"suitable": True})), bot, 1)
+    channel = await service.add_channel("@scoutjobs")
+    assert service.source_paused(channel)
     bot.send_message.assert_not_awaited()
+    repo.set_setting("platform_sources_enabled", "true")
+    assert not service.source_paused(channel)
+    await service.notify_candidate(channel)
+    bot.send_message.assert_awaited_once()
 
 
 @pytest.mark.asyncio
@@ -451,6 +458,52 @@ async def test_monitor_does_not_notify_kwork_post(repo):
     assert repo.stats()["jobs"] == 0
     ai.ask.assert_not_awaited()
     bot.send_message.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_platform_posts_and_sources_resume_from_menu_setting(repo):
+    channel = repo.candidate(100, "scoutjobs", "Заказы Kwork", "", None, 70, "", [])
+    repo.transition_channel(channel.id, "approved")
+
+    class PlatformSource(FakeSource):
+        calls = 0
+
+        async def messages(self, channel, min_id):
+            self.calls += 1
+            yield SimpleNamespace(id=1, raw_text="Нужен сайт, отклик через FL.ru",
+                                  date=datetime.now(timezone.utc), media=None, fwd_from=None)
+
+    source = PlatformSource()
+    bot = SimpleNamespace(send_message=AsyncMock(return_value=SimpleNamespace(message_id=42)))
+    service = ScoutService(repo, source, FakeAI(), bot, 1)
+    await service.monitor()
+    assert source.calls == 0
+    repo.set_setting("platform_sources_enabled", "true")
+    await service.monitor()
+    assert source.calls == 1
+    assert repo.stats()["jobs"] == 1
+    bot.send_message.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_mixed_channel_sends_direct_contact_but_skips_fl(repo):
+    channel = repo.candidate(100, "scoutjobs", "IT заказы", "", None, 70, "", [])
+    repo.transition_channel(channel.id, "approved")
+
+    class MixedSource(FakeSource):
+        async def messages(self, channel, min_id):
+            for number, text in enumerate((
+                "Нужен Python бот, отклик через FL.ru",
+                "Нужен Python бот для CRM, пишите заказчику @client12345",
+            ), 1):
+                yield SimpleNamespace(id=number, raw_text=text, date=datetime.now(timezone.utc),
+                                      media=None, fwd_from=None)
+
+    bot = SimpleNamespace(send_message=AsyncMock(return_value=SimpleNamespace(message_id=42)))
+    service = ScoutService(repo, MixedSource(), FakeAI(), bot, 1)
+    await service.monitor()
+    assert repo.stats()["jobs"] == 1
+    bot.send_message.assert_awaited_once()
 
 
 @pytest.mark.asyncio

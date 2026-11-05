@@ -2,7 +2,15 @@ import pytest
 
 from scout.ai import validate_response
 from scout.core import (calculate_score, explicit_ai_coding, explicit_it_task, likely_job, normalize_link,
-                        ongoing_role, potential_job, similar, text_hash)
+                        ongoing_role, platform_only_post, potential_job, similar, text_hash)
+
+
+def test_platform_only_post_keeps_direct_contact():
+    assert platform_only_post("Нужен сайт, отклик только через FL.ru")
+    assert platform_only_post("Нужен бот, заявки через биржу")
+    assert platform_only_post("Нужен API, заказ на Freelancehunt.com")
+    assert not platform_only_post("Нужен сайт, пишите заказчику @client12345")
+    assert not platform_only_post("Нужен сайт на Kwork, но пишите напрямую @client12345")
 
 
 def test_relevance():

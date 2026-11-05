@@ -9,7 +9,7 @@ from aiogram import Bot
 from telethon.errors import FloodWaitError
 
 from .core import (explicit_ai_coding, explicit_it_task, has_direct_contact, likely_job,
-                   mentions_kwork, ongoing_role, potential_job, similar)
+                   mentions_platform, ongoing_role, platform_only_post, potential_job, similar)
 from .models import Channel
 from .repository import Repository
 
@@ -60,6 +60,13 @@ class ScoutService:
         self.last_monitor_finished: datetime | None = None
         self.last_monitor_errors: list[str] = []
 
+    def platforms_enabled(self) -> bool:
+        return self.repo.setting("platform_sources_enabled", "false") == "true"
+
+    def source_paused(self, channel: Channel | None) -> bool:
+        return bool(channel) and not self.platforms_enabled() and mentions_platform(
+            " ".join((channel.username or "", channel.title or "", channel.description or "")))
+
     async def add_channel(self, raw: str) -> Channel | None:
         from .telegram import parse_public_channel
         username = parse_public_channel(raw)
@@ -69,8 +76,6 @@ class ScoutService:
         except Exception:
             log.exception("История канала %s недоступна; ручное добавление продолжено", username)
             examples, active, ad_ratio = [], False, 0.0
-        if mentions_kwork(" ".join((entity.title or "", *examples))):
-            raise ValueError("источник ведёт на Kwork")
         verified = []
         for example in examples:
             try:
@@ -89,8 +94,6 @@ class ScoutService:
         if verified:
             examples = verified
         description = await self.source.description(entity)
-        if mentions_kwork(" ".join((entity.title or "", description or ""))):
-            raise ValueError("источник ведёт на Kwork")
         channel = self.repo.candidate(entity.id, entity.username, entity.title, description, None, usefulness, reason, examples)
         if channel:
             await self.notify_candidate(channel)
@@ -99,8 +102,7 @@ class ScoutService:
     async def notify_candidate(self, channel: Channel) -> None:
         from .bot import candidate_keyboard
         candidate = self.repo.get_candidate(channel.id)
-        if (not candidate or candidate.owner_notified
-                or mentions_kwork(" ".join((channel.title or "", channel.description or "", *candidate.examples)))):
+        if not candidate or candidate.owner_notified or self.source_paused(channel):
             return
         examples = "\n".join("• " + x[:180] for x in candidate.examples[:2]) or "Нет подходящих примеров"
         text = (f"Новый чат/канал: {channel.title}\n@{channel.username} · https://t.me/{channel.username}\n"
@@ -114,7 +116,7 @@ class ScoutService:
         entries = [(channel, self.repo.get_candidate(channel.id)) for channel in channels]
         entries = [(channel, candidate) for channel, candidate in entries
                    if candidate and not candidate.owner_notified
-                   and not mentions_kwork(" ".join((channel.title or "", channel.description or "", *candidate.examples)))]
+                   and not self.source_paused(channel)]
         if not entries:
             return
         entries.sort(key=lambda item: item[1].usefulness, reverse=True)
@@ -142,7 +144,7 @@ class ScoutService:
             for channel in channels:
                 candidate = self.repo.get_candidate(channel.id)
                 if (channel.status == "pending" and candidate and candidate.query and not candidate.owner_notified
-                        and not mentions_kwork(" ".join((channel.title or "", channel.description or "", *candidate.examples)))):
+                        and not self.source_paused(channel)):
                     batch.append(channel)
                 if not candidate or not candidate.query or not candidate.examples:
                     continue
@@ -210,7 +212,7 @@ class ScoutService:
                     content = (post.raw_text or "") if post else ""
                     if entity.id in known:
                         continue
-                    if mentions_kwork(" ".join((entity.title or "", content))):
+                    if not self.platforms_enabled() and mentions_platform(entity.title or ""):
                         continue
                     if post and (post.date < datetime.now(timezone.utc) - timedelta(days=3)
                                  or not likely_job(content) or not DEVELOPMENT_TASK.search(content)):
@@ -223,10 +225,11 @@ class ScoutService:
                         if not active or ad_ratio > .5:
                             continue
                         description = await self.source.description(entity)
-                        if mentions_kwork(" ".join((description or "", *examples))):
+                        if not self.platforms_enabled() and mentions_platform(description or ""):
                             continue
                         examples = [text for text in dict.fromkeys([content, *examples])
-                                    if likely_job(text) and DEVELOPMENT_TASK.search(text)]
+                                    if likely_job(text) and DEVELOPMENT_TASK.search(text)
+                                    and (self.platforms_enabled() or not platform_only_post(text))]
                         if examples and any(similar(examples[0], prior) for prior in seen_examples):
                             continue
                         verified = []
@@ -271,6 +274,7 @@ class ScoutService:
             self.last_monitor_errors = []
             try:
                 channels = self.repo.list_channels("approved")
+                channels = [channel for channel in channels if not self.source_paused(channel)]
                 log.info("Мониторинг начат: одобренных каналов %s", len(channels))
                 for channel in channels:
                     try:
@@ -296,7 +300,9 @@ class ScoutService:
             try:
                 ongoing = ongoing_role(message.text)
                 ai_coding = explicit_ai_coding(message.text)
-                if (mentions_kwork(message.text) or not potential_job(message.text)
+                if ((not self.platforms_enabled() and platform_only_post(message.text))
+                        or self.source_paused(self.repo.get_channel(message.channel_id))
+                        or not potential_job(message.text)
                         or not (explicit_it_task(message.text) or (ongoing and ai_coding))
                         or (ongoing and not ai_coding)
                         or self.repo.previously_irrelevant(message)):
@@ -333,7 +339,7 @@ class ScoutService:
 
     async def notify_job(self, job_id: int, kind: str) -> None:
         from .bot import job_keyboard
-        if mentions_kwork(self.repo.job_original(job_id) or ""):
+        if (not self.platforms_enabled() and platform_only_post(self.repo.job_original(job_id) or "")) or self.source_paused(self.repo.job_channel(job_id)):
             return
         if not self.repo.claim_notification(job_id, kind):
             return
