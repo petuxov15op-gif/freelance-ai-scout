@@ -48,6 +48,9 @@ requests structured JSON responses and validates them locally. Its token balance
 are **not** measured by the bot's OpenRouter USD limit; check them with the seller.
 Do not put either key in Git or screenshots. Verify the exact endpoint and model ID
 before switching, then use the bot's **Check** menu and inspect a real analysis.
+Automatic discovery is off by default. A manual **Find chats now** run is capped at
+`DISCOVERY_AI_CALL_LIMIT=10` model calls; the next button press continues with the
+next search phrase. Channel monitoring stays active independently of this limit.
 
 The optional `TELEGRAM_PHONE` is used for the first interactive login. Keep `.env` and the resulting Telegram session private. Then authorize the user account and start the bot:
 

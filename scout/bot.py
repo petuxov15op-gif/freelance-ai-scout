@@ -348,6 +348,9 @@ def create_router(service) -> Router:
             time = retry.astimezone(ZoneInfo("Asia/Yekaterinburg")).strftime("%d.%m %H:%M") if retry else "позже"
             await message.answer(f"Бесплатный поиск Telegram пока недоступен. Повторю после {time} (Екб)."
                                  + (f" Новых чатов на рассмотрение: {found}." if found else ""))
+        elif status == "limited":
+            await message.answer(f"Поиск остановлен после {service.discovery_ai_call_limit} запросов к модели. "
+                                 f"Новых чатов на рассмотрение: {found}. Чтобы продолжить с другого запроса, нажми кнопку ещё раз.")
         else:
             await message.answer(f"Поиск завершён. Новых чатов на рассмотрение: {found}."
                                  + (f" Ошибок при проверке: {errors}." if errors else ""))

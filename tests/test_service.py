@@ -373,6 +373,34 @@ async def test_discovery_suggests_recent_development_chats_across_queries(repo):
 
 
 @pytest.mark.asyncio
+async def test_manual_discovery_stops_at_model_call_limit(repo):
+    class Source(FakeSource):
+        async def post_search_quota(self, query):
+            return SimpleNamespace(remains=10, query_is_free=False, wait_till=None)
+
+        async def search_public_posts(self, query):
+            return []
+
+        async def search_public_chats(self, query, limit=30):
+            return [SimpleNamespace(id=i, username=f"jobs{i:05}", title=f"Chat {i}") for i in range(100, 103)]
+
+        async def inspect(self, entity, max_age_days=30):
+            return ["Нужен разработчик Python для интеграции API, оплата по договорённости"], True, 0.0
+
+    class AI:
+        calls = 0
+
+        async def ask(self, kind, text):
+            self.calls += 1
+            return {"suitable": False, "reason": "не подходит"}
+
+    ai = AI()
+    service = ScoutService(repo, Source(), ai, SimpleNamespace(send_message=AsyncMock()), 1, 2)
+    assert (await service.discover())[0] == "limited"
+    assert ai.calls == 2
+
+
+@pytest.mark.asyncio
 async def test_discovery_excludes_kwork_and_prioritizes_direct_contact(repo):
     class DiscoverySource(FakeSource):
         async def post_search_quota(self, query):

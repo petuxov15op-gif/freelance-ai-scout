@@ -41,7 +41,7 @@ async def run() -> None:
         config.openrouter_proxy_url if config.ai_provider == "openrouter" else "",
         provider=config.ai_provider, base_url=config.alternate_api_base_url,
     )
-    service = ScoutService(repo, source, ai, bot, config.owner_id)
+    service = ScoutService(repo, source, ai, bot, config.owner_id, config.discovery_ai_call_limit)
     dispatcher = Dispatcher()
     dispatcher.include_router(create_router(service))
     scheduler = AsyncIOScheduler(timezone=ZoneInfo("Asia/Yekaterinburg"))
