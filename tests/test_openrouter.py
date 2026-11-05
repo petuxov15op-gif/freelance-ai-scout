@@ -106,7 +106,7 @@ async def test_alternate_provider_keeps_openrouter_fields_out(repo):
         assert request.url.path == "/v1/chat/completions"
         payload = json.loads(request.content)
         assert payload["model"] == "claude-opus-5-5"
-        assert payload["response_format"] == {"type": "json_object"}
+        assert payload["response_format"]["type"] == "json_schema"
         assert "provider" not in payload and "usage" not in payload
         return httpx.Response(200, json={"choices": [{"message": {"content": '{"suitable": true, "reason": "да"}'}}]})
 

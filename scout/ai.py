@@ -158,7 +158,6 @@ class OpenRouter:
         if self.provider == "compatible":
             payload.pop("provider")
             payload.pop("usage")
-            payload["response_format"] = {"type": "json_object"}
         async with self.semaphore:
             if self.provider == "openrouter" and self.repo.cost_today() >= self.daily_limit:
                 self.last_status = "дневной лимит достигнут"

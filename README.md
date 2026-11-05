@@ -44,7 +44,7 @@ The default `AI_PROVIDER=openrouter` keeps the existing OpenRouter setup. To try
 OpenAI-compatible endpoint, set `AI_PROVIDER=compatible`, `ALTERNATE_API_KEY`,
 `ALTERNATE_API_BASE_URL` (HTTPS base ending in `/v1`), and `ALTERNATE_MODEL` in the
 private `.env`. Switching back only requires `AI_PROVIDER=openrouter`. The alternative
-uses JSON object responses and validates them locally. Its token balance and spending
+requests structured JSON responses and validates them locally. Its token balance and spending
 are **not** measured by the bot's OpenRouter USD limit; check them with the seller.
 Do not put either key in Git or screenshots. Verify the exact endpoint and model ID
 before switching, then use the bot's **Check** menu and inspect a real analysis.
