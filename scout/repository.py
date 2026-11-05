@@ -99,6 +99,13 @@ class Repository:
             state = db.get(MonitoringState, channel_id)
             return state.last_message_id if state else 0
 
+    def advance_cursor(self, channel_id: int, message_id: int) -> None:
+        with transaction(self.factory) as db:
+            state = db.get(MonitoringState, channel_id)
+            if state and message_id > state.last_message_id:
+                state.last_message_id = message_id
+                state.checked_at = utcnow()
+
     def save_message(self, channel_id: int, telegram_message_id: int, text: str, link: str | None,
                      published_at: datetime, metadata: dict) -> Message:
         with transaction(self.factory) as db:
@@ -189,6 +196,10 @@ class Repository:
     def job_original(self, job_id: int) -> str | None:
         with self.factory() as db:
             return db.scalar(select(Message.text).join(JobSource).where(JobSource.job_id == job_id).limit(1))
+
+    def job_message(self, job_id: int) -> Message | None:
+        with self.factory() as db:
+            return db.scalar(select(Message).join(JobSource).where(JobSource.job_id == job_id).limit(1))
 
     def job_channel(self, job_id: int) -> Channel | None:
         with self.factory() as db:

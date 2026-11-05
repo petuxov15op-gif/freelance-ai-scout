@@ -15,22 +15,38 @@ def normalize_text(value: str) -> str:
 def mentions_platform(value: str) -> bool:
     return bool(re.search(
         r"(?<![A-Za-zА-Яа-я0-9])(?:kwork|кворк\w*|fl\.ru|freelancehunt(?:\.com)?|"
-        r"freelancer\.com|weblancer(?:\.net)?|workzilla(?:\.com)?)(?![A-Za-zА-Яа-я0-9])",
+        r"freelancer\.com|freelance\.ru|youdo\.com|weblancer(?:\.net)?|"
+        r"workzilla(?:\.com)?|intwork\.top|offersad\.date|jobss\.ru|"
+        r"vibejobs\.ru|leadradar)(?![A-Za-zА-Яа-я0-9])",
         value, re.IGNORECASE))
 
 
-def platform_only_post(value: str) -> bool:
-    if has_direct_contact(value):
-        return False
-    return (mentions_platform(value) or bool(re.search(
-        r"(?:отклик(?:нуться)?|заявк\w*|писать|пишите)\s+(?:только\s+)?"
-        r"(?:через|на|в)\s+(?:бирж\w*|площадк\w*)", value, re.IGNORECASE)))
+def has_direct_contact_link(value: str, links: list[dict] | None = None,
+                            source_username: str | None = None) -> bool:
+    if has_direct_contact(value, source_username):
+        return True
+    for link in links or []:
+        label = link.get("label", "")
+        url = link.get("url", "")
+        match = re.match(r"https?://t\.me/([A-Za-z][A-Za-z0-9_]{4,31})(?:[/?#]|$)", url, re.IGNORECASE)
+        if (match and re.search(r"(?:напишите|пишите|связаться|связь|контакт|личк|написать|dm\b)", label, re.IGNORECASE)
+                and not match[1].lower().endswith("bot")
+                and match[1].lower() != (source_username or "").lower()):
+            return True
+    return False
 
 
-def has_direct_contact(value: str) -> bool:
-    contact = r"(?:@[A-Za-z][A-Za-z0-9_]{4,31}\b|(?:https?://)?t\.me/[A-Za-z][A-Za-z0-9_]{4,31}\b)"
-    invitation = r"(?:пишите|писать|напишите|обращайтесь|связь|контакт|заказчик|в\s+лс|в\s+личк\w*|dm\b|contact\b)"
-    return bool(re.search(rf"(?:{invitation}).{{0,80}}{contact}|{contact}.{{0,80}}(?:{invitation})", value, re.IGNORECASE))
+def has_direct_contact(value: str, source_username: str | None = None) -> bool:
+    contact = r"(?:@|(?:https?://)?t\.me/)([A-Za-z][A-Za-z0-9_]{4,31})\b"
+    invitation = r"(?:пишите|писать|напишите|обращайтесь|связь|контакт|отклик|в\s+лс|в\s+личк\w*|dm\b|contact\b)"
+    for match in re.finditer(contact, value, re.IGNORECASE):
+        username = match[1].lower()
+        if username.endswith("bot") or username == (source_username or "").lower():
+            continue
+        nearby = value[max(0, match.start() - 80):match.end() + 80]
+        if re.search(invitation, nearby, re.IGNORECASE):
+            return True
+    return False
 
 
 def text_hash(value: str) -> str:

@@ -8,8 +8,8 @@ from datetime import datetime, timedelta, timezone
 from aiogram import Bot
 from telethon.errors import FloodWaitError
 
-from .core import (explicit_ai_coding, explicit_it_task, has_direct_contact, likely_job,
-                   mentions_platform, ongoing_role, platform_only_post, potential_job, similar)
+from .core import (explicit_ai_coding, explicit_it_task, has_direct_contact, has_direct_contact_link, likely_job,
+                   mentions_platform, ongoing_role, potential_job, similar)
 from .models import Channel
 from .repository import Repository
 
@@ -35,6 +35,12 @@ DEVELOPMENT_TASK = re.compile(
     r"скрипт|приложен|crm\b|api\b|python\b|frontend\b|backend\b|wordpress\b|tilda\b)",
     re.IGNORECASE,
 )
+PAUSED_PLATFORM_SOURCES = {
+    "design_ai_jobs", "job_developer", "zakazy_it", "freelance_dev_work",
+    "freelancers_kwork", "freelance_zakazy", "job_programming_apps_chatgpt_n8n",
+    "remotefreelancejob", "workmasterit", "vibejobsru", "taylor_jobs", "horseatwork",
+    "jobscode", "mobiledevjobs", "development_vakans",
+}
 
 
 def job_text(job, analysis, link: str | None) -> str:
@@ -63,9 +69,25 @@ class ScoutService:
     def platforms_enabled(self) -> bool:
         return self.repo.setting("platform_sources_enabled", "false") == "true"
 
+    @staticmethod
+    def platform_source(channel: Channel | None) -> bool:
+        return bool(channel) and (
+            (channel.username or "").lower() in PAUSED_PLATFORM_SOURCES or mentions_platform(
+                " ".join((channel.username or "", channel.title or "", channel.description or ""))))
+
     def source_paused(self, channel: Channel | None) -> bool:
-        return bool(channel) and not self.platforms_enabled() and mentions_platform(
-            " ".join((channel.username or "", channel.title or "", channel.description or "")))
+        return not self.platforms_enabled() and self.platform_source(channel)
+
+    async def set_platforms_enabled(self, enabled: bool) -> None:
+        if enabled and not self.platforms_enabled():
+            async with self.monitor_lock:
+                for channel in self.repo.list_channels("approved"):
+                    if self.platform_source(channel):
+                        latest = await self.source.latest_message_id(channel)
+                        self.repo.advance_cursor(channel.id, latest)
+                self.repo.set_setting("platform_sources_enabled", "true")
+        else:
+            self.repo.set_setting("platform_sources_enabled", "true" if enabled else "false")
 
     async def add_channel(self, raw: str) -> Channel | None:
         from .telegram import parse_public_channel
@@ -229,7 +251,7 @@ class ScoutService:
                             continue
                         examples = [text for text in dict.fromkeys([content, *examples])
                                     if likely_job(text) and DEVELOPMENT_TASK.search(text)
-                                    and (self.platforms_enabled() or not platform_only_post(text))]
+                                    and (self.platforms_enabled() or has_direct_contact(text, entity.username))]
                         if examples and any(similar(examples[0], prior) for prior in seen_examples):
                             continue
                         verified = []
@@ -244,7 +266,7 @@ class ScoutService:
                                 break
                         if not verified:
                             continue
-                        direct = has_direct_contact(verified[0])
+                        direct = has_direct_contact(verified[0], entity.username)
                         channel = self.repo.candidate(
                             entity.id, entity.username, entity.title, description, query,
                             80 if direct else 50,
@@ -279,9 +301,11 @@ class ScoutService:
                 for channel in channels:
                     try:
                         async for item in self.source.messages(channel, self.repo.cursor(channel.id)):
+                            from .telegram import outbound_links
                             link = f"https://t.me/{channel.username}/{item.id}" if channel.username else None
                             self.repo.save_message(channel.id, item.id, item.raw_text or "", link, item.date,
-                                                   {"has_media": bool(item.media), "forwarded": bool(item.fwd_from)})
+                                                   {"has_media": bool(item.media), "forwarded": bool(item.fwd_from),
+                                                    "outbound_links": outbound_links(item)})
                             await asyncio.sleep(.3)
                     except Exception as exc:
                         self.last_monitor_errors.append(f"@{channel.username or channel.id}: {type(exc).__name__}")
@@ -298,10 +322,12 @@ class ScoutService:
         self.repo.recover_stale_notifications()
         for message in self.repo.pending_messages():
             try:
+                channel = self.repo.get_channel(message.channel_id)
                 ongoing = ongoing_role(message.text)
                 ai_coding = explicit_ai_coding(message.text)
-                if ((not self.platforms_enabled() and platform_only_post(message.text))
-                        or self.source_paused(self.repo.get_channel(message.channel_id))
+                if ((not self.platforms_enabled() and not has_direct_contact_link(
+                        message.text, message.metadata_json.get("outbound_links"), channel.username if channel else None))
+                        or self.source_paused(channel)
                         or not potential_job(message.text)
                         or not (explicit_it_task(message.text) or (ongoing and ai_coding))
                         or (ongoing and not ai_coding)
@@ -339,7 +365,10 @@ class ScoutService:
 
     async def notify_job(self, job_id: int, kind: str) -> None:
         from .bot import job_keyboard
-        if (not self.platforms_enabled() and platform_only_post(self.repo.job_original(job_id) or "")) or self.source_paused(self.repo.job_channel(job_id)):
+        message = self.repo.job_message(job_id)
+        channel = self.repo.job_channel(job_id)
+        if (not self.platforms_enabled() and (not message or not has_direct_contact_link(
+                message.text, message.metadata_json.get("outbound_links"), channel.username if channel else None))) or self.source_paused(channel):
             return
         if not self.repo.claim_notification(job_id, kind):
             return

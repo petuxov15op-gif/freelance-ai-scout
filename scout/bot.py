@@ -9,7 +9,6 @@ from aiogram.filters import Command
 from aiogram.types import (BotCommand, CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup,
                            KeyboardButton, Message, ReplyKeyboardMarkup)
 
-from .core import mentions_platform
 from .service import JOB_STATUS_LABELS, job_text
 from .telegram import parse_public_channel
 
@@ -281,13 +280,12 @@ def create_router(service) -> Router:
     @router.message(Command("platforms"))
     async def platforms(message: Message):
         channels = [channel for channel in repo.list_channels("approved")
-                    if mentions_platform(" ".join((channel.username or "", channel.title or "", channel.description or "")))]
+                    if service.platform_source(channel)]
         enabled = service.platforms_enabled()
         label = "⏸ Выключить площадки" if enabled else "▶️ Включить площадки"
         text = (f"Площадки: {'включены' if enabled else 'на паузе'}\n"
-                "Объявления с откликом только через Kwork, FL и другие биржи "
-                f"{'проверяются' if enabled else 'не присылаются'}.\n"
-                "Источники с площадками:\n"
+                f"Объявления без прямого Telegram-контакта {'проверяются' if enabled else 'не присылаются'}.\n"
+                f"Источники без прямого отклика ({len(channels)}):\n"
                 + ("\n".join(f"• @{c.username} — {c.title}" for c in channels) or "Пока нет"))
         await message.answer(text[:4000], reply_markup=InlineKeyboardMarkup(inline_keyboard=[
             [InlineKeyboardButton(text=label, callback_data=f"platforms:{'off' if enabled else 'on'}")]]))
@@ -416,7 +414,7 @@ def create_router(service) -> Router:
                 await callback.answer("Порог отключён: присылаются все подходящие IT-варианты", show_alert=True)
                 return
             if len(parts) == 2 and parts[0] == "platforms" and parts[1] in {"on", "off"}:
-                repo.set_setting("platform_sources_enabled", "true" if parts[1] == "on" else "false")
+                await service.set_platforms_enabled(parts[1] == "on")
                 await callback.answer("Площадки включены" if parts[1] == "on" else "Площадки на паузе")
                 await platforms(callback.message)
                 return

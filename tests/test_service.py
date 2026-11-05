@@ -9,10 +9,32 @@ from scout.bot import create_router, job_keyboard
 from scout.service import DISCOVERY_QUERIES, ScoutService
 
 
+def test_audited_sources_pause_only_confirmed_intermediaries(repo):
+    service = ScoutService(repo, SimpleNamespace(), SimpleNamespace(), SimpleNamespace(), 1)
+    for username in ("remoteFreelanceJob", "workmasterIT", "design_ai_jobs", "zakazy_it",
+                     "jobsCode", "mobileDevJobs", "development_vakans"):
+        assert service.source_paused(SimpleNamespace(username=username, title="Jobs", description=""))
+    for username in ("sova_freelance", "workk_on", "webjobagregator"):
+        assert not service.source_paused(SimpleNamespace(username=username, title="Jobs", description=""))
+
+
+@pytest.mark.asyncio
+async def test_enabling_platforms_starts_at_new_posts(repo):
+    channel = repo.candidate(100, "workmasterIT", "Jobs", "", None, 70, "", [])
+    repo.transition_channel(channel.id, "approved", initial_cursor=5)
+    source = SimpleNamespace(latest_message_id=AsyncMock(return_value=20))
+    service = ScoutService(repo, source, SimpleNamespace(), SimpleNamespace(), 1)
+    await service.set_platforms_enabled(True)
+    assert repo.cursor(channel.id) == 20
+    assert service.platforms_enabled()
+    await service.set_platforms_enabled(True)
+    source.latest_message_id.assert_awaited_once()
+
+
 class FakeSource:
     async def messages(self, channel, min_id):
         if min_id < 1:
-            yield SimpleNamespace(id=1, raw_text="Нужен сайт для небольшой компании, оплата и детали по договоренности",
+            yield SimpleNamespace(id=1, raw_text="Нужен сайт для небольшой компании, оплата и детали по договоренности. Пишите заказчику @client12345",
                                   date=datetime.now(timezone.utc), media=None, fwd_from=None)
 
     async def resolve(self, username):
@@ -163,7 +185,7 @@ async def test_permanent_it_role_with_explicit_vibe_coding_is_sent(repo):
     class VibeSource(FakeSource):
         async def messages(self, channel, min_id):
             if min_id < 1:
-                yield SimpleNamespace(id=1, raw_text="Вакансия Python-разработчика в штат: писать ботов с помощью вайбкодинга и Codex, зарплата 120000 рублей",
+                    yield SimpleNamespace(id=1, raw_text="Вакансия Python-разработчика в штат: писать ботов с помощью вайбкодинга и Codex, зарплата 120000 рублей. Пишите @client12345",
                                       date=datetime.now(timezone.utc), media=None, fwd_from=None)
 
     class VibeAI(FakeAI):
@@ -211,7 +233,7 @@ async def test_part_time_requires_explicit_ai_coding_except_one_off(repo, announ
     class PartTimeSource(FakeSource):
         async def messages(self, channel, min_id):
             if min_id < 1:
-                yield SimpleNamespace(id=1, raw_text=announcement,
+                yield SimpleNamespace(id=1, raw_text=announcement + ". Пишите заказчику @client12345",
                                       date=datetime.now(timezone.utc), media=None, fwd_from=None)
 
     class PartTimeAI(FakeAI):
@@ -236,7 +258,7 @@ async def test_explicit_vibe_coding_part_time_is_sent_when_ai_mislabels_it_and_p
     class VibeSource(FakeSource):
         async def messages(self, channel, min_id):
             if min_id < 1:
-                yield SimpleNamespace(id=1, raw_text="Подработка 3 часа в день: делайте задачи через вайб кодинг, оплата 50000 рублей в месяц",
+                yield SimpleNamespace(id=1, raw_text="Подработка 3 часа в день: делайте задачи через вайб кодинг, оплата 50000 рублей в месяц. Пишите @client12345",
                                       date=datetime.now(timezone.utc), media=None, fwd_from=None)
 
     class MislabelingAI(FakeAI):
@@ -356,7 +378,7 @@ async def test_discovery_suggests_recent_development_chats_across_queries(repo):
         async def inspect(self, entity, max_age_days=30):
             assert max_age_days == 3
             examples = {
-                1: "Нужен разработчик Python для интеграции API, оплата по договорённости",
+                1: "Нужен разработчик Python для интеграции API, оплата по договорённости. Пишите @client12345",
                 2: "Нужен дизайнер для оформления логотипа, оплата 5000 рублей",
                 3: "Требуется менеджер по продажам на удалёнку, оплата по договорённости",
                 4: "Нужен разработчик бота на Python, оплата по договорённости",
@@ -392,7 +414,7 @@ async def test_manual_discovery_stops_at_model_call_limit(repo):
             return [SimpleNamespace(id=i, username=f"jobs{i:05}", title=f"Chat {i}") for i in range(100, 103)]
 
         async def inspect(self, entity, max_age_days=30):
-            return ["Нужен разработчик Python для интеграции API, оплата по договорённости"], True, 0.0
+            return ["Нужен разработчик Python для интеграции API, оплата по договорённости. Пишите @client12345"], True, 0.0
 
     class AI:
         calls = 0
@@ -408,7 +430,7 @@ async def test_manual_discovery_stops_at_model_call_limit(repo):
 
 
 @pytest.mark.asyncio
-async def test_discovery_excludes_kwork_and_prioritizes_direct_contact(repo):
+async def test_discovery_only_suggests_direct_contact_sources(repo):
     class DiscoverySource(FakeSource):
         async def post_search_quota(self, query):
             return SimpleNamespace(remains=0, query_is_free=True, wait_till=None)
@@ -433,12 +455,13 @@ async def test_discovery_excludes_kwork_and_prioritizes_direct_contact(repo):
     ai = SimpleNamespace(ask=AsyncMock(return_value={"suitable": True}))
     bot = SimpleNamespace(send_message=AsyncMock(return_value=SimpleNamespace(message_id=1)))
     service = ScoutService(repo, DiscoverySource(), ai, bot, 1)
-    assert (await service.discover())[:3] == ("done", 2, 0)
+    assert (await service.discover())[:3] == ("done", 1, 0)
     candidates = repo.list_channels("pending")
-    assert {channel.username for channel in candidates} == {"jobs00001", "jobs00003"}
+    assert {channel.username for channel in candidates} == {"jobs00003"}
     assert repo.get_candidate(next(c.id for c in candidates if c.username == "jobs00003")).usefulness == 80
     digest = bot.send_message.await_args.args[1]
-    assert digest.index("Прямые заказы") < digest.index("Обычные заказы")
+    assert "Прямые заказы" in digest
+    assert "Обычные заказы" not in digest
 
 
 @pytest.mark.asyncio
@@ -507,6 +530,29 @@ async def test_mixed_channel_sends_direct_contact_but_skips_fl(repo):
 
 
 @pytest.mark.asyncio
+async def test_external_and_unknown_posts_are_skipped_before_ai(repo):
+    channel = repo.candidate(100, "scoutjobs", "IT заказы", "", None, 70, "", [])
+    repo.transition_channel(channel.id, "approved")
+
+    class ExternalSource(FakeSource):
+        async def messages(self, channel, min_id):
+            for number, text in enumerate((
+                "Нужен Python бот, отклик https://freelance.ru/task/view/123",
+                "Нужен Python бот, подробности после перехода по ссылке",
+            ), 1):
+                yield SimpleNamespace(id=number, raw_text=text, date=datetime.now(timezone.utc),
+                                      media=None, fwd_from=None)
+
+    ai = SimpleNamespace(ask=AsyncMock())
+    bot = SimpleNamespace(send_message=AsyncMock())
+    service = ScoutService(repo, ExternalSource(), ai, bot, 1)
+    await service.monitor()
+    assert repo.stats()["jobs"] == 0
+    ai.ask.assert_not_awaited()
+    bot.send_message.assert_not_awaited()
+
+
+@pytest.mark.asyncio
 async def test_discovery_waits_for_telegrams_quota_reset(repo):
     class DiscoverySource(FakeSource):
         def __init__(self):
@@ -548,7 +594,7 @@ async def test_discovery_obeys_flood_wait(repo):
 
 @pytest.mark.asyncio
 async def test_discovery_deduplicates_reposted_orders_across_chats(repo):
-    order = "Нужен разработчик Python для интеграции API, оплата по договорённости"
+    order = "Нужен разработчик Python для интеграции API, оплата по договорённости. Пишите @client12345"
 
     class RepostSource(FakeSource):
         async def post_search_quota(self, query):
@@ -598,7 +644,7 @@ async def test_discovery_sends_five_chat_digest_and_remaining_one(repo):
                 5: "Требуется разработать мобильное приложение для доставки еды",
                 6: "Заказ на парсинг каталога товаров, оплата по договорённости",
             }
-            return [orders[entity.id]], True, 0.0
+            return [orders[entity.id] + ". Пишите заказчику @client12345"], True, 0.0
 
     ai = SimpleNamespace(ask=AsyncMock(return_value={"suitable": True}))
     bot = SimpleNamespace(send_message=AsyncMock(return_value=SimpleNamespace(message_id=1)))

@@ -2,15 +2,19 @@ import pytest
 
 from scout.ai import validate_response
 from scout.core import (calculate_score, explicit_ai_coding, explicit_it_task, likely_job, normalize_link,
-                        ongoing_role, platform_only_post, potential_job, similar, text_hash)
+                        has_direct_contact_link, mentions_platform, ongoing_role, potential_job, similar, text_hash)
 
 
-def test_platform_only_post_keeps_direct_contact():
-    assert platform_only_post("Нужен сайт, отклик только через FL.ru")
-    assert platform_only_post("Нужен бот, заявки через биржу")
-    assert platform_only_post("Нужен API, заказ на Freelancehunt.com")
-    assert not platform_only_post("Нужен сайт, пишите заказчику @client12345")
-    assert not platform_only_post("Нужен сайт на Kwork, но пишите напрямую @client12345")
+def test_platform_names_and_direct_contact():
+    assert mentions_platform("Нужен сайт, отклик только через FL.ru")
+    assert mentions_platform("Нужен API, заказ на Freelancehunt.com")
+    assert mentions_platform("Контакт заказчика — в LeadRadar")
+    assert mentions_platform("https://freelance.ru/task/view/14746")
+    assert not has_direct_contact_link("Контакт заказчика в LeadRadar. Подробнее на сайте")
+    assert not has_direct_contact_link("Узнать больше в @SetJobs_bot")
+    assert not has_direct_contact_link("Напишите в @job_developer", source_username="job_developer")
+    assert has_direct_contact_link("Нужен бот", [{"label": "Написать заказчику", "url": "https://t.me/client12345"}])
+    assert not has_direct_contact_link("Нужен бот", [{"label": "Подробнее", "url": "https://t.me/SetJobs_bot"}])
 
 
 def test_relevance():

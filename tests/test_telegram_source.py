@@ -5,7 +5,18 @@ from types import SimpleNamespace
 import pytest
 from telethon import types
 
-from scout.telegram import TelegramSource
+from scout.telegram import TelegramSource, outbound_links
+
+
+def test_outbound_links_reads_hidden_text_and_buttons():
+    text = "🔥 Заявка"
+    message = SimpleNamespace(raw_text=text,
+                              entities=[types.MessageEntityTextUrl(offset=3, length=6, url="https://fl.ru/projects/1")],
+                              buttons=[[SimpleNamespace(text="Написать", url="https://t.me/client12345")]])
+    assert outbound_links(message) == [
+        {"label": "Заявка", "url": "https://fl.ru/projects/1"},
+        {"label": "Написать", "url": "https://t.me/client12345"},
+    ]
 
 
 @pytest.mark.asyncio

@@ -110,3 +110,19 @@ class TelegramSource:
             log.warning("FloodWait %s: %s секунд", channel.title, exc.seconds)
             await asyncio.sleep(exc.seconds)
             raise
+
+
+def outbound_links(message) -> list[dict[str, str]]:
+    result = []
+    text = message.raw_text or ""
+    for entity in getattr(message, "entities", None) or []:
+        url = getattr(entity, "url", None)
+        if url:
+            encoded = text.encode("utf-16-le")
+            label = encoded[entity.offset * 2:(entity.offset + entity.length) * 2].decode("utf-16-le")
+            result.append({"label": label, "url": url})
+    for row in getattr(message, "buttons", None) or []:
+        for button in row:
+            if button.url:
+                result.append({"label": button.text or "", "url": button.url})
+    return result

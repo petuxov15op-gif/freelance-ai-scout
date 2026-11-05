@@ -55,7 +55,9 @@ async def test_manual_search_menu_button_starts_discovery_and_reports_result(rep
 @pytest.mark.asyncio
 async def test_platform_menu_toggles_persisted_setting(repo):
     service = SimpleNamespace(owner_id=1, repo=repo,
-                              platforms_enabled=lambda: repo.setting("platform_sources_enabled", "false") == "true")
+                              platforms_enabled=lambda: repo.setting("platform_sources_enabled", "false") == "true",
+                              set_platforms_enabled=AsyncMock(side_effect=lambda enabled: repo.set_setting(
+                                  "platform_sources_enabled", "true" if enabled else "false")))
     router = create_router(service)
     menu_handler = next(item.callback for item in router.message.handlers if item.callback.__name__ == "menu_action")
     callback_handler = router.callback_query.handlers[0].callback
@@ -65,6 +67,7 @@ async def test_platform_menu_toggles_persisted_setting(repo):
     callback = SimpleNamespace(data="platforms:on", message=message, answer=AsyncMock())
     await callback_handler(callback)
     assert repo.setting("platform_sources_enabled") == "true"
+    service.set_platforms_enabled.assert_awaited_once_with(True)
     assert "включены" in message.answer.await_args.args[0]
 
 
