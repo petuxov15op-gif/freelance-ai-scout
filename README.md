@@ -8,7 +8,7 @@ A personal Telegram bot that monitors owner-approved channels for relevant freel
 
 - Adds a public Telegram channel only after the owner confirms it in the bot's menu.
 - Checks approved channels every 10 minutes and stores progress in SQLite so posts can be processed across restarts.
-- Uses Telegram's free global post searches to find public channels with recent software requests and a direct Telegram contact, then screens source activity within three days and sends candidates in review digests of up to five chats. It checks the remaining free quota and resumes when Telegram says it resets; it never authorizes Stars spending.
+- Continuously uses Telegram's free global post searches to find public channels with recent software requests and a direct Telegram contact, then screens source activity within three days and sends candidates in review digests of up to five chats. It checks the remaining free quota and resumes when Telegram says it resets; it never authorizes Stars spending.
 - Filters out unrelated remote jobs and posts without a concrete software task. One-off software projects do not need to mention AI. Ongoing roles must explicitly involve AI-assisted development.
 - Pauses audited sources without direct replies and skips posts without a direct Telegram contact before AI analysis. The owner can resume them with **Channels → Platforms**; monitoring starts at fresh posts when re-enabled.
 - Uses OpenRouter for structured analysis of candidate posts and delivers every qualifying opportunity with a direct contact without a score threshold.
@@ -49,9 +49,9 @@ requests structured JSON responses and validates them locally. Its token balance
 are **not** measured by the bot's OpenRouter USD limit; check them with the seller.
 Do not put either key in Git or screenshots. Verify the exact endpoint and model ID
 before switching, then use the bot's **Check** menu and inspect a real analysis.
-Automatic discovery is off by default. A manual **Find chats now** run is capped at
+Automatic discovery is on by default. Each search pass, including a manual **Find chats now** run, is capped at
 `DISCOVERY_AI_CALL_LIMIT=10` model calls; the next button press continues with the
-next search phrase. Channel monitoring stays active independently of this limit.
+next search phrase, while the automatic loop continues on its own. Channel monitoring stays active independently of this limit.
 
 The optional `TELEGRAM_PHONE` is used for the first interactive login. Keep `.env` and the resulting Telegram session private. Then authorize the user account and start the bot:
 
