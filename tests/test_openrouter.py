@@ -3,7 +3,7 @@ import json
 import httpx
 import pytest
 
-from scout.ai import OpenRouter
+from scout.ai import OpenRouter, validate_response
 
 
 @pytest.mark.asyncio
@@ -24,6 +24,36 @@ async def test_openrouter_structured_and_usage(repo):
         assert repo.cost_today() == pytest.approx(.001)
     finally:
         await ai.close()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("case_id,expected_link", [
+    (None, False), ("null", False), ("freelance_ai_scout", True),
+])
+async def test_draft_uses_verified_case_only_when_selected(repo, case_id, expected_link):
+    def respond(request):
+        payload = json.loads(request.content)
+        assert payload["response_format"]["json_schema"]["schema"]["required"] == ["draft", "case_id"]
+        assert payload["temperature"] == 0.4
+        assert "Не используй заготовки" in payload["messages"][0]["content"]
+        assert "https://github.com/petuxov15op-gif/freelance-ai-scout" in payload["messages"][0]["content"]
+        return httpx.Response(200, json={"choices": [{"message": {"content": json.dumps({
+            "draft": "Здравствуйте! Могу помочь с сайтом.", "case_id": case_id,
+        })}}]})
+
+    ai = OpenRouter("fake-key", "test-model", repo, 1)
+    await ai.client.aclose()
+    ai.client = httpx.AsyncClient(transport=httpx.MockTransport(respond), base_url="https://openrouter.ai/api/v1")
+    try:
+        draft = (await ai.ask("draft", "Нужен сайт"))["draft"]
+        assert ("https://github.com/petuxov15op-gif/freelance-ai-scout" in draft) is expected_link
+    finally:
+        await ai.close()
+
+
+def test_draft_rejects_unverified_link():
+    with pytest.raises(ValueError):
+        validate_response({"draft": "Вот работа: https://example.com", "case_id": None}, "draft")
 
 
 @pytest.mark.asyncio
