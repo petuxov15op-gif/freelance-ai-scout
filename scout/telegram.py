@@ -111,6 +111,15 @@ class TelegramSource:
             await asyncio.sleep(exc.seconds)
             raise
 
+    async def messages_since(self, channel, since: datetime):
+        recent = []
+        async for message in self.client.iter_messages(channel.username or channel.telegram_id):
+            if message.date < since:
+                break
+            recent.append(message)
+        for message in reversed(recent):
+            yield message
+
 
 def outbound_links(message) -> list[dict[str, str]]:
     result = []

@@ -4,6 +4,7 @@ import asyncio
 import logging
 import re
 from datetime import datetime, timedelta, timezone
+from zoneinfo import ZoneInfo
 
 from aiogram import Bot
 from telethon.errors import FloodWaitError
@@ -301,11 +302,7 @@ class ScoutService:
                 for channel in channels:
                     try:
                         async for item in self.source.messages(channel, self.repo.cursor(channel.id)):
-                            from .telegram import outbound_links
-                            link = f"https://t.me/{channel.username}/{item.id}" if channel.username else None
-                            self.repo.save_message(channel.id, item.id, item.raw_text or "", link, item.date,
-                                                   {"has_media": bool(item.media), "forwarded": bool(item.fwd_from),
-                                                    "outbound_links": outbound_links(item)})
+                            self._save_item(channel, item)
                             await asyncio.sleep(.3)
                     except Exception as exc:
                         self.last_monitor_errors.append(f"@{channel.username or channel.id}: {type(exc).__name__}")
@@ -318,9 +315,42 @@ class ScoutService:
             finally:
                 self.last_monitor_finished = datetime.now(timezone.utc)
 
-    async def process_pending(self) -> None:
+    def _save_item(self, channel: Channel, item, advance_cursor: bool = True) -> None:
+        from .telegram import outbound_links
+        link = f"https://t.me/{channel.username}/{item.id}" if channel.username else None
+        self.repo.save_message(channel.id, item.id, item.raw_text or "", link, item.date,
+                               {"has_media": bool(item.media), "forwarded": bool(item.fwd_from),
+                                "outbound_links": outbound_links(item)}, advance_cursor=advance_cursor)
+
+    async def backfill_today(self) -> tuple[int, int, int, list[str]]:
+        async with self.monitor_lock:
+            self.last_monitor_started = datetime.now(timezone.utc)
+            self.last_monitor_errors = []
+            today = datetime.now(ZoneInfo("Asia/Yekaterinburg")).replace(
+                hour=0, minute=0, second=0, microsecond=0).astimezone(timezone.utc)
+            channels = [channel for channel in self.repo.list_channels("approved")
+                        if not self.source_paused(channel)]
+            before = self.repo.stats()["messages"]
+            scanned = 0
+            try:
+                for channel in channels:
+                    try:
+                        async for item in self.source.messages_since(channel, today):
+                            self._save_item(channel, item, advance_cursor=False)
+                            scanned += 1
+                            await asyncio.sleep(.3)
+                    except Exception as exc:
+                        self.last_monitor_errors.append(f"@{channel.username or channel.id}: {type(exc).__name__}")
+                        log.exception("Повторная проверка канала %s прервана", channel.title)
+                new_messages = self.repo.stats()["messages"] - before
+                await self.process_pending(limit=None)
+                return len(channels), scanned, new_messages, self.last_monitor_errors.copy()
+            finally:
+                self.last_monitor_finished = datetime.now(timezone.utc)
+
+    async def process_pending(self, limit: int | None = 500) -> None:
         self.repo.recover_stale_notifications()
-        for message in self.repo.pending_messages():
+        for message in self.repo.pending_messages(limit=limit):
             try:
                 channel = self.repo.get_channel(message.channel_id)
                 ongoing = ongoing_role(message.text)

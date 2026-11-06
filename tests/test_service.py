@@ -121,6 +121,27 @@ async def test_monitor_recovers_after_ai_outage(repo):
 
 
 @pytest.mark.asyncio
+async def test_backfill_today_checks_posts_before_cursor_without_duplicate_notifications(repo):
+    channel = repo.candidate(100, "scoutjobs", "Jobs", "", None, 70, "", [])
+    repo.transition_channel(channel.id, "approved", initial_cursor=10)
+    post = SimpleNamespace(id=12, raw_text="Нужен сайт для небольшой компании, оплата и детали по договоренности. Пишите заказчику @client12345",
+                           date=datetime.now(timezone.utc), media=None, fwd_from=None, entities=None, buttons=None)
+
+    class Source(FakeSource):
+        async def messages_since(self, channel, since):
+            assert since <= post.date
+            yield post
+
+    bot = SimpleNamespace(send_message=AsyncMock(return_value=SimpleNamespace(message_id=42)))
+    service = ScoutService(repo, Source(), FakeAI(), bot, 1)
+    assert await service.backfill_today() == (1, 1, 1, [])
+    assert repo.cursor(channel.id) == 10
+    assert repo.stats()["jobs"] == 1
+    assert await service.backfill_today() == (1, 1, 0, [])
+    bot.send_message.assert_awaited_once()
+
+
+@pytest.mark.asyncio
 async def test_suitable_job_is_sent_without_score_threshold(repo):
     channel = repo.candidate(100, "scoutjobs", "Jobs", "", None, 70, "", [])
     repo.transition_channel(channel.id, "approved")

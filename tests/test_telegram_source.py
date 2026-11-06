@@ -69,6 +69,23 @@ async def test_inspect_rejects_stale_chat_and_old_examples(tmp_path):
 
 
 @pytest.mark.asyncio
+async def test_messages_since_reads_every_post_today_oldest_first(tmp_path):
+    source = TelegramSource(12345, "fake-hash", str(tmp_path / "session"))
+    start = datetime(2026, 11, 6, tzinfo=timezone.utc)
+
+    class Client:
+        async def iter_messages(self, entity):
+            for number, date in [(4, start + timedelta(hours=2)),
+                                 (3, start + timedelta(hours=1)),
+                                 (2, start), (1, start - timedelta(seconds=1))]:
+                yield SimpleNamespace(id=number, date=date)
+
+    source.client = Client()
+    channel = SimpleNamespace(username="scoutjobs", telegram_id=100)
+    assert [message.id async for message in source.messages_since(channel, start)] == [2, 3, 4]
+
+
+@pytest.mark.asyncio
 async def test_global_post_search_never_authorizes_stars(tmp_path):
     source = TelegramSource(12345, "fake-hash", str(tmp_path / "session"))
     channel = types.Channel(id=123, title="Jobs", username="job_for_bots", access_hash=456, photo=None, date=None)

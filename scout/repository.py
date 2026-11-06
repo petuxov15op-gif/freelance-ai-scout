@@ -107,7 +107,7 @@ class Repository:
                 state.checked_at = utcnow()
 
     def save_message(self, channel_id: int, telegram_message_id: int, text: str, link: str | None,
-                     published_at: datetime, metadata: dict) -> Message:
+                     published_at: datetime, metadata: dict, advance_cursor: bool = True) -> Message:
         with transaction(self.factory) as db:
             message = db.scalar(select(Message).where(Message.channel_id == channel_id,
                                                       Message.telegram_message_id == telegram_message_id))
@@ -118,7 +118,7 @@ class Repository:
                 db.add(message)
                 db.flush()
             state = db.get(MonitoringState, channel_id)
-            if state and telegram_message_id > state.last_message_id:
+            if advance_cursor and state and telegram_message_id > state.last_message_id:
                 state.last_message_id = telegram_message_id
                 state.checked_at = utcnow()
             return message
@@ -127,9 +127,10 @@ class Repository:
         with transaction(self.factory) as db:
             db.get(Message, message_id).status = status
 
-    def pending_messages(self) -> list[Message]:
+    def pending_messages(self, limit: int | None = 500) -> list[Message]:
         with self.factory() as db:
-            return list(db.scalars(select(Message).where(Message.status == "pending").order_by(Message.id).limit(500)))
+            query = select(Message).where(Message.status == "pending").order_by(Message.id)
+            return list(db.scalars(query.limit(limit) if limit is not None else query))
 
     def previously_irrelevant(self, message: Message) -> bool:
         with self.factory() as db:

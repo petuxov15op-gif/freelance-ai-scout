@@ -17,7 +17,7 @@ log = logging.getLogger(__name__)
 MENU_SECTIONS = {
     "📋 Заказы": ("latest", "top"),
     "📡 Каналы": ("sources", "pending", "discover", "platforms"),
-    "📊 Бот": ("status", "check", "stats", "settings"),
+    "📊 Бот": ("status", "check", "today", "stats", "settings"),
 }
 MENU_LABELS = {
     "latest": "📋 Последние",
@@ -28,6 +28,7 @@ MENU_LABELS = {
     "platforms": "🏪 Площадки",
     "status": "📊 Статус",
     "check": "🩺 Проверить",
+    "today": "🔄 Проверить сегодня",
     "stats": "📈 Статистика",
     "settings": "⚙️ Настройки",
 }
@@ -45,6 +46,7 @@ MENU_ACTIONS = {
     "⭐ Лучшие": "top",
     "📊 Статус": "status",
     "🩺 Проверить": "check",
+    "🔄 Проверить сегодня": "today",
     "📈 Статистика": "stats",
     "⚙️ Настройки": "settings",
 }
@@ -71,6 +73,7 @@ def bot_commands() -> list[BotCommand]:
     return [BotCommand(command=name, description=description) for name, description in (
         ("menu", "Показать кнопки"), ("status", "Состояние бота"),
         ("check", "Проверить работу бота"),
+        ("today", "Проверить публикации за сегодня"),
         ("sources", "Отслеживаемые каналы"),
         ("pending", "Каналы на подтверждении"), ("add", "Добавить канал"),
         ("latest", "Последние заказы"), ("top", "Лучшие заказы"),
@@ -260,6 +263,22 @@ def create_router(service) -> Router:
     async def check(message: Message):
         await message.answer(await health_text(service))
 
+    @router.message(Command("today"))
+    async def today(message: Message):
+        if service.monitor_lock.locked():
+            await message.answer("Проверка уже идёт. Попробуй ещё раз после её завершения.")
+            return
+        await message.answer("Проверяю все публикации за сегодня в одобренных каналах. Подходящие предложения пришлю отдельно.")
+        try:
+            channels, scanned, new, errors = await service.backfill_today()
+        except Exception:
+            log.exception("Ручная проверка публикаций за сегодня")
+            await message.answer("Проверка прервалась. Подробности записаны в журнал бота.")
+            return
+        await message.answer(f"Проверка за сегодня завершена: каналов {channels}, публикаций {scanned}, "
+                             f"новых для базы {new}."
+                             + (f" Ошибки в {len(errors)} случаях; попробуй позже ещё раз." if errors else ""))
+
     @router.message(Command("sources"))
     async def sources(message: Message):
         channels = repo.list_channels("approved")
@@ -388,7 +407,7 @@ def create_router(service) -> Router:
             await message.answer("Пришлите @имя канала или ссылку t.me. Можно несколько через пробел.")
             return
         handlers = {"sources": sources, "pending": pending, "platforms": platforms,
-                    "latest": latest, "top": top, "status": status, "check": check, "discover": discover,
+                    "latest": latest, "top": top, "status": status, "check": check, "today": today, "discover": discover,
                     "stats": stats, "settings": settings}
         await handlers[action](message)
 
@@ -406,7 +425,7 @@ def create_router(service) -> Router:
                 action = parts[1]
                 await callback.answer()
                 handlers = {"sources": sources, "pending": pending, "platforms": platforms, "latest": latest,
-                            "top": top, "status": status, "check": check,
+                            "top": top, "status": status, "check": check, "today": today,
                             "discover": discover, "stats": stats, "settings": settings}
                 await handlers[action](callback.message)
                 return
