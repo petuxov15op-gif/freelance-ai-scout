@@ -4,6 +4,7 @@ import httpx
 import pytest
 
 from scout.ai import OpenRouter, validate_response
+from scout.portfolio import relevant_cases
 
 
 @pytest.mark.asyncio
@@ -27,16 +28,20 @@ async def test_openrouter_structured_and_usage(repo):
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("case_id,expected_link", [
-    (None, False), ("null", False), ("freelance_ai_scout", True),
+@pytest.mark.parametrize("announcement,case_id,expected_link", [
+    ("Нужен простой сайт, без Тильды", None, False),
+    ("Нужен простой сайт, без Тильды", "null", False),
+    ("Нужен Telegram-бот для отслеживания объявлений в каналах", "freelance_ai_scout", True),
 ])
-async def test_draft_uses_verified_case_only_when_selected(repo, case_id, expected_link):
+async def test_draft_uses_verified_case_only_when_selected(repo, announcement, case_id, expected_link):
     def respond(request):
         payload = json.loads(request.content)
         assert payload["response_format"]["json_schema"]["schema"]["required"] == ["draft", "case_id"]
         assert payload["temperature"] == 0.4
-        assert "Не используй заготовки" in payload["messages"][0]["content"]
-        assert "https://github.com/petuxov15op-gif/freelance-ai-scout" in payload["messages"][0]["content"]
+        assert "Не додумывай сферу заказчика" in payload["messages"][0]["content"]
+        system = payload["messages"][0]["content"]
+        assert "пекарн" not in system.lower()
+        assert ("https://github.com/petuxov15op-gif/freelance-ai-scout" in system) is expected_link
         return httpx.Response(200, json={"choices": [{"message": {"content": json.dumps({
             "draft": "Здравствуйте! Могу помочь с сайтом.", "case_id": case_id,
         })}}]})
@@ -45,7 +50,7 @@ async def test_draft_uses_verified_case_only_when_selected(repo, case_id, expect
     await ai.client.aclose()
     ai.client = httpx.AsyncClient(transport=httpx.MockTransport(respond), base_url="https://openrouter.ai/api/v1")
     try:
-        draft = (await ai.ask("draft", "Нужен сайт"))["draft"]
+        draft = (await ai.ask("draft", announcement))["draft"]
         assert ("https://github.com/petuxov15op-gif/freelance-ai-scout" in draft) is expected_link
     finally:
         await ai.close()
@@ -54,6 +59,28 @@ async def test_draft_uses_verified_case_only_when_selected(repo, case_id, expect
 def test_draft_rejects_unverified_link():
     with pytest.raises(ValueError):
         validate_response({"draft": "Вот работа: https://example.com", "case_id": None}, "draft")
+
+
+def test_unrelated_announcement_has_no_portfolio_context():
+    assert relevant_cases("НУЖЕН НЕДОРОГОЙ ПРОСТОЙ САЙТ, НЕ ТИЛЬДА") == {}
+    assert "freelance_ai_scout" in relevant_cases(
+        "Нужен Telegram-бот, который отслеживает объявления в каналах")
+
+
+@pytest.mark.asyncio
+async def test_draft_rejects_case_for_unrelated_site(repo):
+    response = {"choices": [{"message": {"content": json.dumps({
+        "draft": "Здравствуйте! Сайт сделаю.", "case_id": "freelance_ai_scout",
+    })}}]}
+    ai = OpenRouter("fake-key", "test-model", repo, 1)
+    await ai.client.aclose()
+    ai.client = httpx.AsyncClient(transport=httpx.MockTransport(
+        lambda request: httpx.Response(200, json=response)), base_url="https://openrouter.ai/api/v1")
+    try:
+        with pytest.raises(ValueError, match="неподходящим проектом"):
+            await ai.ask("draft", "Нужен сайт")
+    finally:
+        await ai.close()
 
 
 @pytest.mark.asyncio
