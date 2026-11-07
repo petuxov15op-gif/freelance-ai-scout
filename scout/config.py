@@ -22,6 +22,7 @@ class Config:
     alternate_api_key: str
     alternate_api_base_url: str
     alternate_model: str
+    draft_model: str
     bot_token: str
     owner_id: int
     telegram_api_id: int
@@ -56,6 +57,7 @@ class Config:
             alternate_api_key=os.getenv("ALTERNATE_API_KEY", ""),
             alternate_api_base_url=base_url,
             alternate_model=os.getenv("ALTERNATE_MODEL", ""),
+            draft_model=os.getenv("ALTERNATE_DRAFT_MODEL", "") if provider == "compatible" else "",
             bot_token=os.environ["BOT_TOKEN"],
             owner_id=int(os.environ["OWNER_ID"]),
             telegram_api_id=int(os.environ["TELEGRAM_API_ID"]),

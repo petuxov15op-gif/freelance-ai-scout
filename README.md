@@ -47,6 +47,7 @@ OpenAI-compatible endpoint, set `AI_PROVIDER=compatible`, `ALTERNATE_API_KEY`,
 private `.env`. Switching back only requires `AI_PROVIDER=openrouter`. The alternative
 requests structured JSON responses and validates them locally. Its token balance and spending
 are **not** measured by the bot's OpenRouter USD limit; check them with the seller.
+Set optional `ALTERNATE_DRAFT_MODEL` to use a separate model for reply drafts while keeping candidate analysis on `ALTERNATE_MODEL`.
 Do not put either key in Git or screenshots. Verify the exact endpoint and model ID
 before switching, then use the bot's **Check** menu and inspect a real analysis.
 Automatic discovery is on by default. Search passes check all discovered chats without a separate model-call cap.

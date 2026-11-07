@@ -11,13 +11,14 @@ from scout.portfolio import relevant_cases
 async def test_openrouter_structured_and_usage(repo):
     def respond(request):
         payload = json.loads(request.content)
+        assert payload["model"] == "test-model"
         assert payload["response_format"]["type"] == "json_schema"
         assert {"is_job", "is_it", "codex_feasible", "is_ongoing", "ai_coding_explicit"} <= set(payload["response_format"]["json_schema"]["schema"]["required"])
         assert payload["provider"]["require_parameters"] is True
         return httpx.Response(200, json={"choices": [{"message": {"content": '{"is_job": true, "is_it": true, "codex_feasible": true, "is_ongoing": false, "ai_coding_explicit": false, "reason": "заказ"}'}}],
                                          "usage": {"prompt_tokens": 10, "completion_tokens": 5, "cost": 0.001}})
 
-    ai = OpenRouter("fake-key", "test-model", repo, 1)
+    ai = OpenRouter("fake-key", "test-model", repo, 1, draft_model="draft-model")
     await ai.client.aclose()
     ai.client = httpx.AsyncClient(transport=httpx.MockTransport(respond), base_url="https://openrouter.ai/api/v1")
     try:
@@ -36,17 +37,18 @@ async def test_openrouter_structured_and_usage(repo):
 async def test_draft_uses_verified_case_only_when_selected(repo, announcement, case_id, expected_link):
     def respond(request):
         payload = json.loads(request.content)
+        assert payload["model"] == "draft-model"
         assert payload["response_format"]["json_schema"]["schema"]["required"] == ["draft", "case_id"]
         assert payload["temperature"] == 0.4
-        assert "Не додумывай сферу заказчика" in payload["messages"][0]["content"]
+        assert "Не приписывай себе опыт" in payload["messages"][0]["content"]
         system = payload["messages"][0]["content"]
         assert "пекарн" not in system.lower()
         assert ("https://github.com/petuxov15op-gif/freelance-ai-scout" in system) is expected_link
         return httpx.Response(200, json={"choices": [{"message": {"content": json.dumps({
-            "draft": "Здравствуйте! Могу помочь с сайтом.", "case_id": case_id,
+            "draft": "Здравствуйте! Сделаю сайт по вашей задаче. Расскажите, какие страницы нужны?", "case_id": case_id,
         })}}]})
 
-    ai = OpenRouter("fake-key", "test-model", repo, 1)
+    ai = OpenRouter("fake-key", "test-model", repo, 1, draft_model="draft-model")
     await ai.client.aclose()
     ai.client = httpx.AsyncClient(transport=httpx.MockTransport(respond), base_url="https://openrouter.ai/api/v1")
     try:
@@ -68,6 +70,17 @@ def test_draft_rejects_unverified_link():
 ])
 def test_draft_rejects_customer_contact_and_informal_address(draft):
     assert draft_problem(draft)
+
+
+@pytest.mark.parametrize("draft,announcement", [
+    ("Здравствуйте! Разрабатывал похожие боты. Расскажите о задаче?", "Нужен Telegram-бот"),
+    ("Здравствуйте! Сделаю сайт на WordPress. Пришлите описание?", "Нужен простой сайт"),
+    ("Здравствуйте! Сделаю лендинг. Макет в Figma уже есть?", "Нужен лендинг, макет отдадим в Figma"),
+    ("Готов взяться за сайт.", "Нужен сайт"),
+    ("Здравствуйте! Сделаю сайт, который будет работать в любой стране. Что вам нужно?", "Нужен сайт на любой территории"),
+])
+def test_draft_rejects_unverified_claims_and_redundant_questions(draft, announcement):
+    assert draft_problem(draft, announcement)
 
 
 def test_unrelated_announcement_has_no_portfolio_context():
@@ -101,7 +114,7 @@ async def test_draft_retries_contact_sent_back_to_customer(repo):
 
     def respond(request):
         payload = json.loads(request.content)
-        assert "не предлагай заказчику написать" in payload["messages"][0]["content"]
+        assert "Контакты и указания, куда писать" in payload["messages"][0]["content"]
         return httpx.Response(200, json={"choices": [{"message": {"content": json.dumps({
             "draft": next(replies), "case_id": None,
         })}}]})

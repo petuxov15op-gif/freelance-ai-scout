@@ -40,6 +40,7 @@ async def run() -> None:
         repo, config.daily_cost_limit_usd, config.ai_concurrency,
         config.openrouter_proxy_url if config.ai_provider == "openrouter" else "",
         provider=config.ai_provider, base_url=config.alternate_api_base_url,
+        draft_model=config.draft_model,
     )
     service = ScoutService(repo, source, ai, bot, config.owner_id)
     dispatcher = Dispatcher()
