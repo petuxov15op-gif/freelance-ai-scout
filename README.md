@@ -49,9 +49,8 @@ requests structured JSON responses and validates them locally. Its token balance
 are **not** measured by the bot's OpenRouter USD limit; check them with the seller.
 Do not put either key in Git or screenshots. Verify the exact endpoint and model ID
 before switching, then use the bot's **Check** menu and inspect a real analysis.
-Automatic discovery is on by default. Each search pass, including a manual **Find chats now** run, is capped at
-`DISCOVERY_AI_CALL_LIMIT=10` model calls; the next button press continues with the
-next search phrase, while the automatic loop continues on its own. Channel monitoring stays active independently of this limit.
+Automatic discovery is on by default. Search passes check all discovered chats without a separate model-call cap.
+Telegram's free search quota still determines when discovery pauses and resumes. Channel monitoring stays active independently.
 
 The optional `TELEGRAM_PHONE` is used for the first interactive login. Keep `.env` and the resulting Telegram session private. Then authorize the user account and start the bot:
 

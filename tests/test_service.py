@@ -423,7 +423,7 @@ async def test_discovery_suggests_recent_development_chats_across_queries(repo):
 
 
 @pytest.mark.asyncio
-async def test_manual_discovery_stops_at_model_call_limit(repo):
+async def test_discovery_checks_all_found_chats_without_model_call_limit(repo):
     class Source(FakeSource):
         async def post_search_quota(self, query):
             return SimpleNamespace(remains=10, query_is_free=False, wait_till=None)
@@ -445,9 +445,9 @@ async def test_manual_discovery_stops_at_model_call_limit(repo):
             return {"suitable": False, "reason": "не подходит"}
 
     ai = AI()
-    service = ScoutService(repo, Source(), ai, SimpleNamespace(send_message=AsyncMock()), 1, 2)
-    assert (await service.discover())[0] == "limited"
-    assert ai.calls == 2
+    service = ScoutService(repo, Source(), ai, SimpleNamespace(send_message=AsyncMock()), 1)
+    assert (await service.discover())[0] == "done"
+    assert ai.calls == 3
 
 
 @pytest.mark.asyncio

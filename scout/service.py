@@ -57,10 +57,8 @@ def job_text(job, analysis, link: str | None) -> str:
 
 
 class ScoutService:
-    def __init__(self, repo: Repository, source, ai, bot: Bot, owner_id: int,
-                 discovery_ai_call_limit: int = 10):
+    def __init__(self, repo: Repository, source, ai, bot: Bot, owner_id: int):
         self.repo, self.source, self.ai, self.bot, self.owner_id = repo, source, ai, bot, owner_id
-        self.discovery_ai_call_limit = discovery_ai_call_limit
         self.monitor_lock = asyncio.Lock()
         self.discovery_lock = asyncio.Lock()
         self.last_monitor_started: datetime | None = None
@@ -178,7 +176,6 @@ class ScoutService:
                     seen_examples.append(candidate.examples[0])
             suggested = 0
             errors = 0
-            model_calls = 0
 
             async def flush_batch(all_items: bool = False) -> None:
                 nonlocal errors
@@ -257,11 +254,6 @@ class ScoutService:
                             continue
                         verified = []
                         for example in examples[:3]:
-                            if model_calls >= self.discovery_ai_call_limit:
-                                log.info("Ручной поиск остановлен: достигнут лимит %s запросов к модели",
-                                         self.discovery_ai_call_limit)
-                                return await finish("limited", None)
-                            model_calls += 1
                             if (await self.ai.ask("candidate", example))["suitable"]:
                                 verified.append(example)
                                 break

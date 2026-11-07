@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import re
 from typing import Any
 
 import httpx
@@ -33,6 +34,16 @@ DEEP_FIELDS = {
 DEEP_SCHEMA = {"type": "object", "properties": DEEP_FIELDS, "required": list(DEEP_FIELDS), "additionalProperties": False}
 PLAN_SCHEMA = {"type": "object", "properties": {"plan": {"type": "array", "items": {"type": "string"}}, "questions": {"type": "array", "items": {"type": "string"}}}, "required": ["plan", "questions"], "additionalProperties": False}
 DRAFT_SCHEMA = {"type": "object", "properties": {"draft": {"type": "string"}, "case_id": {"type": ["string", "null"]}}, "required": ["draft", "case_id"], "additionalProperties": False}
+
+
+def draft_problem(draft: str) -> str | None:
+    if (re.search(r"@[A-Za-z][A-Za-z0-9_]{4,}", draft)
+            or re.search(r"\b[\w.+-]+@[\w.-]+\.[A-Za-z]{2,}\b", draft)
+            or re.search(r"(?:\+?\d[\s()-]*){10,}", draft)):
+        return "В черновике оказался контакт из объявления"
+    if re.search(r"\b(?:ты|тебе|тебя|твой|твоя|твои|напиши|пиши)\b", draft, re.I):
+        return "Черновик обращается к заказчику на «ты»"
+    return None
 
 
 def validate_response(data: Any, kind: str) -> dict:
@@ -158,6 +169,9 @@ class OpenRouter:
                       "которые прямо есть в объявлении. Не додумывай сферу заказчика, назначение проекта, функции "
                       "или пожелания заказчика. Если объявление короткое, отклик тоже может быть коротким. "
                       "Скажи, что готов взяться, и задай один конкретный вопрос только если он нужен для начала работы. "
+                      "Это сообщение от исполнителя автору объявления. Контакт в объявлении — адрес заказчика "
+                      "для исполнителя: не предлагай заказчику написать на его собственный контакт, "
+                      "не вставляй в отклик @username, телефон или email из объявления. "
                       "Пиши как в обычной переписке, без канцелярита, рекламы и шаблонных фраз. "
                       "Не пиши, что у владельца нет опыта, но и не приписывай ему выполненные работы или навыки. "
                       "Не называй цену, сроки, стек и результаты без подтверждения. Без заголовка, списков и Markdown. "
@@ -188,12 +202,20 @@ class OpenRouter:
                     body = response.json()
                     raw = body["choices"][0]["message"]["content"]
                     data = validate_response(json.loads(raw), kind)
+                    self.repo.record_usage(self.model, kind, body.get("usage") or {})
                     if kind == "draft" and data["case_id"] not in {None, *draft_cases}:
                         raise ValueError("Черновик с неподходящим проектом")
+                    if kind == "draft":
+                        problem = draft_problem(data["draft"])
+                        if problem:
+                            if attempt == 2:
+                                raise ValueError(problem)
+                            payload["messages"].append({"role": "user", "content":
+                                f"Сделай новый черновик. Ошибка предыдущего: {problem}. Соблюдай обращение на «вы» и не повторяй контакты заказчика."})
+                            continue
                     if kind == "draft" and data["case_id"]:
                         case = CASES[data["case_id"]]
                         data["draft"] = data["draft"].rstrip() + "\n" + case["reply_line"] + " " + case["url"]
-                    self.repo.record_usage(self.model, kind, body.get("usage") or {})
                     self.last_status = "последний запрос успешен"
                     return data
                 except (httpx.TimeoutException, httpx.TransportError, httpx.HTTPStatusError) as exc:

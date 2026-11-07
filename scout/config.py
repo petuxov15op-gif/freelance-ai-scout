@@ -35,7 +35,6 @@ class Config:
     daily_cost_limit_usd: float
     ai_concurrency: int
     discovery_enabled: bool
-    discovery_ai_call_limit: int
     log_level: str
 
     @classmethod
@@ -70,6 +69,5 @@ class Config:
             daily_cost_limit_usd=float(os.getenv("DAILY_COST_LIMIT_USD", "1")),
             ai_concurrency=max(1, int(os.getenv("AI_CONCURRENCY", "2"))),
             discovery_enabled=os.getenv("DISCOVERY_ENABLED", "true").strip().lower() in {"1", "true", "yes"},
-            discovery_ai_call_limit=max(1, int(os.getenv("DISCOVERY_AI_CALL_LIMIT", "10"))),
             log_level=os.getenv("LOG_LEVEL", "INFO"),
         )

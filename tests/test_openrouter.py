@@ -3,7 +3,7 @@ import json
 import httpx
 import pytest
 
-from scout.ai import OpenRouter, validate_response
+from scout.ai import OpenRouter, draft_problem, validate_response
 from scout.portfolio import relevant_cases
 
 
@@ -61,6 +61,15 @@ def test_draft_rejects_unverified_link():
         validate_response({"draft": "Вот работа: https://example.com", "case_id": None}, "draft")
 
 
+@pytest.mark.parametrize("draft", [
+    "Напишите на client@example.com",
+    "Позвоните +7 999 123-45-67",
+    "Напиши в личку",
+])
+def test_draft_rejects_customer_contact_and_informal_address(draft):
+    assert draft_problem(draft)
+
+
 def test_unrelated_announcement_has_no_portfolio_context():
     assert relevant_cases("НУЖЕН НЕДОРОГОЙ ПРОСТОЙ САЙТ, НЕ ТИЛЬДА") == {}
     assert "freelance_ai_scout" in relevant_cases(
@@ -79,6 +88,30 @@ async def test_draft_rejects_case_for_unrelated_site(repo):
     try:
         with pytest.raises(ValueError, match="неподходящим проектом"):
             await ai.ask("draft", "Нужен сайт")
+    finally:
+        await ai.close()
+
+
+@pytest.mark.asyncio
+async def test_draft_retries_contact_sent_back_to_customer(repo):
+    replies = iter([
+        "Привет! Готов взяться за разработку Telegram-бота. Напиши в личку @plashnya — обсудим задачи.",
+        "Здравствуйте! Могу разработать Telegram-бота. Расскажите, какие задачи он должен решать?",
+    ])
+
+    def respond(request):
+        payload = json.loads(request.content)
+        assert "не предлагай заказчику написать" in payload["messages"][0]["content"]
+        return httpx.Response(200, json={"choices": [{"message": {"content": json.dumps({
+            "draft": next(replies), "case_id": None,
+        })}}]})
+
+    ai = OpenRouter("fake-key", "test-model", repo, 1)
+    await ai.client.aclose()
+    ai.client = httpx.AsyncClient(transport=httpx.MockTransport(respond), base_url="https://openrouter.ai/api/v1")
+    try:
+        result = await ai.ask("draft", "Нужен Telegram-бот. Для отклика пишите @plashnya")
+        assert result["draft"].startswith("Здравствуйте!")
     finally:
         await ai.close()
 
