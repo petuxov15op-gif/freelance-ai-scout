@@ -614,6 +614,22 @@ async def test_discovery_obeys_flood_wait(repo):
 
 
 @pytest.mark.asyncio
+async def test_discovery_stops_on_lost_telegram_connection(repo):
+    class DisconnectedSource(FakeSource):
+        def __init__(self):
+            self.calls = 0
+
+        async def post_search_quota(self, query):
+            self.calls += 1
+            raise ConnectionError("Cannot send requests while disconnected")
+
+    source = DisconnectedSource()
+    service = ScoutService(repo, source, FakeAI(), SimpleNamespace(), 1)
+    assert (await service.discover())[:3] == ("error", 0, 1)
+    assert source.calls == 1
+
+
+@pytest.mark.asyncio
 async def test_discovery_deduplicates_reposted_orders_across_chats(repo):
     order = "Нужен разработчик Python для интеграции API, оплата по договорённости. Пишите @client12345"
 

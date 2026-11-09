@@ -53,6 +53,19 @@ async def test_manual_search_menu_button_starts_discovery_and_reports_result(rep
 
 
 @pytest.mark.asyncio
+async def test_manual_search_reports_lost_connection(repo):
+    service = SimpleNamespace(owner_id=1, repo=repo, discovery_lock=asyncio.Lock(),
+                              discover=AsyncMock(return_value=("error", 0, 1, None)))
+    router = create_router(service)
+    handler = next(item.callback for item in router.message.handlers if item.callback.__name__ == "menu_action")
+    message = SimpleNamespace(text="🔎 Найти чаты сейчас", answer=AsyncMock())
+
+    await handler(message)
+
+    assert "нет соединения с Telegram" in message.answer.await_args_list[-1].args[0]
+
+
+@pytest.mark.asyncio
 async def test_platform_menu_toggles_persisted_setting(repo):
     service = SimpleNamespace(owner_id=1, repo=repo,
                               platforms_enabled=lambda: repo.setting("platform_sources_enabled", "false") == "true",

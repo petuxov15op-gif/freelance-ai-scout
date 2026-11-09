@@ -25,6 +25,7 @@ class TelegramSource:
     def __init__(self, api_id: int, api_hash: str, session_path: str, phone: str = ""):
         self.client = TelegramClient(session_path, api_id, api_hash)
         self.phone = phone
+        self._connect_lock = asyncio.Lock()
 
     async def start(self) -> None:
         await self.client.connect()
@@ -37,7 +38,16 @@ class TelegramSource:
     async def close(self) -> None:
         await self.client.disconnect()
 
+    async def ensure_connected(self) -> None:
+        if self.client.is_connected():
+            return
+        async with self._connect_lock:
+            if not self.client.is_connected():
+                log.warning("Соединение с Telegram потеряно; подключаюсь заново")
+                await self.start()
+
     async def resolve(self, username: str):
+        await self.ensure_connected()
         # get_entity(username) always resolves the name again, even when the
         # session already knows the channel and Telegram has limited lookups.
         peer = await self.client.get_input_entity(username)
@@ -47,14 +57,17 @@ class TelegramSource:
         return entity
 
     async def search_public_chats(self, query: str, limit: int = 30):
+        await self.ensure_connected()
         result = await self.client(functions.contacts.SearchRequest(q=query, limit=limit))
         return [chat for chat in result.chats
                 if isinstance(chat, types.Channel) and chat.username]
 
     async def post_search_quota(self, query: str):
+        await self.ensure_connected()
         return await self.client(functions.channels.CheckSearchPostsFloodRequest(query=query))
 
     async def search_public_posts(self, query: str, limit: int = 100):
+        await self.ensure_connected()
         result = await self.client(functions.channels.SearchPostsRequest(
             offset_rate=0, offset_peer=types.InputPeerEmpty(), offset_id=0,
             limit=limit, query=query,
@@ -71,6 +84,7 @@ class TelegramSource:
         return examples
 
     async def inspect(self, entity, limit: int = 20, max_age_days: int = 30) -> tuple[list[str], bool, float]:
+        await self.ensure_connected()
         result = []
         latest = None
         advertising = 0
@@ -91,6 +105,7 @@ class TelegramSource:
         return result[:3], active, advertising / total if total else 0.0
 
     async def description(self, entity) -> str | None:
+        await self.ensure_connected()
         try:
             full = await self.client(functions.channels.GetFullChannelRequest(entity))
             return getattr(full.full_chat, "about", None)
@@ -98,11 +113,13 @@ class TelegramSource:
             return None
 
     async def latest_message_id(self, channel) -> int:
+        await self.ensure_connected()
         async for message in self.client.iter_messages(channel.username, limit=1):
             return message.id
         return 0
 
     async def messages(self, channel, min_id: int):
+        await self.ensure_connected()
         try:
             async for message in self.client.iter_messages(channel.username or channel.telegram_id, min_id=min_id, reverse=True):
                 yield message
@@ -112,6 +129,7 @@ class TelegramSource:
             raise
 
     async def messages_since(self, channel, since: datetime):
+        await self.ensure_connected()
         recent = []
         async for message in self.client.iter_messages(channel.username or channel.telegram_id):
             if message.date < since:

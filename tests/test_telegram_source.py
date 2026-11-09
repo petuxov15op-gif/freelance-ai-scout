@@ -1,3 +1,4 @@
+import asyncio
 from unittest.mock import AsyncMock
 from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
@@ -30,6 +31,27 @@ async def test_authorized_session_does_not_require_phone(tmp_path):
 
 
 @pytest.mark.asyncio
+async def test_disconnected_session_reconnects_once_for_concurrent_requests(tmp_path):
+    source = TelegramSource(12345, "fake-hash", str(tmp_path / "session"))
+    connected = False
+
+    async def connect():
+        nonlocal connected
+        connected = True
+
+    source.client = AsyncMock()
+    source.client.is_connected = lambda: connected
+    source.client.connect.side_effect = connect
+    source.client.is_user_authorized.return_value = True
+    source.client.return_value = SimpleNamespace(remains=1)
+
+    await asyncio.gather(source.post_search_quota("python"), source.post_search_quota("bot"))
+
+    source.client.connect.assert_awaited_once()
+    source.client.start.assert_not_called()
+
+
+@pytest.mark.asyncio
 async def test_missing_session_gives_setup_instruction(tmp_path):
     source = TelegramSource(12345, "fake-hash", str(tmp_path / "session"))
     source.client = AsyncMock()
@@ -42,6 +64,7 @@ async def test_missing_session_gives_setup_instruction(tmp_path):
 async def test_resolve_uses_cached_peer_instead_of_resolving_username_again(tmp_path):
     source = TelegramSource(12345, "fake-hash", str(tmp_path / "session"))
     source.client = AsyncMock()
+    source.client.is_connected = lambda: True
     peer = types.InputPeerChannel(channel_id=123, access_hash=456)
     channel = types.Channel(id=123, title="Jobs", username="job_for_bots", access_hash=456, photo=None, date=None)
     source.client.get_input_entity.return_value = peer
@@ -58,6 +81,9 @@ async def test_inspect_rejects_stale_chat_and_old_examples(tmp_path):
     now = datetime.now(timezone.utc)
 
     class Client:
+        def is_connected(self):
+            return True
+
         async def iter_messages(self, entity, limit):
             yield SimpleNamespace(date=now - timedelta(days=4), raw_text="Нужен сайт, оплата")
 
@@ -74,6 +100,9 @@ async def test_messages_since_reads_every_post_today_oldest_first(tmp_path):
     start = datetime(2026, 11, 6, tzinfo=timezone.utc)
 
     class Client:
+        def is_connected(self):
+            return True
+
         async def iter_messages(self, entity):
             for number, date in [(4, start + timedelta(hours=2)),
                                  (3, start + timedelta(hours=1)),
@@ -91,6 +120,7 @@ async def test_global_post_search_never_authorizes_stars(tmp_path):
     channel = types.Channel(id=123, title="Jobs", username="job_for_bots", access_hash=456, photo=None, date=None)
     post = SimpleNamespace(peer_id=types.PeerChannel(123), raw_text="Нужен разработчик", date=datetime.now(timezone.utc))
     source.client = AsyncMock(return_value=SimpleNamespace(chats=[channel], messages=[post]))
+    source.client.is_connected = lambda: True
 
     assert await source.search_public_posts("нужен разработчик") == [(channel, post)]
     request = source.client.await_args.args[0]
@@ -103,5 +133,6 @@ async def test_post_search_quota_uses_telegram_counter(tmp_path):
     source = TelegramSource(12345, "fake-hash", str(tmp_path / "session"))
     quota = SimpleNamespace(total_daily=10, remains=4, wait_till=None, query_is_free=False)
     source.client = AsyncMock(return_value=quota)
+    source.client.is_connected = lambda: True
     assert await source.post_search_quota("нужен разработчик") is quota
     assert source.client.await_args.args[0].query == "нужен разработчик"

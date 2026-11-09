@@ -381,6 +381,9 @@ def create_router(service) -> Router:
             time = retry.astimezone(ZoneInfo("Asia/Yekaterinburg")).strftime("%d.%m %H:%M") if retry else "позже"
             await message.answer(f"Бесплатный поиск Telegram пока недоступен. Повторю после {time} (Екб)."
                                  + (f" Новых чатов на рассмотрение: {found}." if found else ""))
+        elif status == "error":
+            await message.answer("Поиск остановлен: нет соединения с Telegram для чтения каналов. "
+                                 "Бот попробует подключиться заново при следующей проверке.")
         else:
             await message.answer(f"Поиск завершён. Новых чатов на рассмотрение: {found}."
                                  + (f" Ошибок при проверке: {errors}." if errors else ""))

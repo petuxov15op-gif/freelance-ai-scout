@@ -224,6 +224,10 @@ class ScoutService:
                     self.repo.set_setting("discovery_retry_at", wait_until.isoformat())
                     log.warning("Telegram ограничил поиск на %s секунд", exc.seconds)
                     return await finish("wait", wait_until)
+                except (ConnectionError, OSError):
+                    errors += 1
+                    log.exception("Соединение с Telegram потеряно во время поиска")
+                    return await finish("error", None)
                 except Exception:
                     errors += 1
                     log.exception("Поиск публикаций по запросу %s не удался", query)
