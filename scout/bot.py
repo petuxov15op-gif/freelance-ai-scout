@@ -1,11 +1,13 @@
 from __future__ import annotations
 
 import logging
+import re
 from datetime import datetime, timezone
 from zoneinfo import ZoneInfo
 
 from aiogram import BaseMiddleware, F, Router
 from aiogram.filters import Command
+from aiogram.exceptions import TelegramBadRequest
 from aiogram.types import (BotCommand, CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup,
                            KeyboardButton, Message, ReplyKeyboardMarkup)
 
@@ -23,7 +25,7 @@ MENU_LABELS = {
     "latest": "📋 Последние",
     "top": "⭐ Лучшие",
     "needs_contact": "⚠️ Уточнить отклик",
-    "sources": "📡 Источники",
+    "sources": "📡 Мои каналы",
     "pending": "🕓 Кандидаты",
     "discover": "🔎 Найти чаты сейчас",
     "platforms": "🏪 Площадки",
@@ -41,6 +43,7 @@ BACK_LABEL = "← Назад"
 # Keep accepting taps from keyboards sent before the menu update.
 MENU_ACTIONS = {
     "📡 Источники": "sources",
+    "📡 Мои каналы": "sources",
     "🕓 Кандидаты": "pending",
     "🔎 Найти чаты сейчас": "discover",
     "🏪 Площадки": "platforms",
@@ -59,7 +62,7 @@ MENU_ACTIONS = {
 
 
 def main_menu() -> ReplyKeyboardMarkup:
-    labels = ["📋 Заказы", "📡 Каналы", ADD_CHANNEL_LABEL, "📊 Бот"]
+    labels = ["📋 Заказы", "📡 Каналы", "📡 Мои каналы", ADD_CHANNEL_LABEL, "📊 Бот"]
     return ReplyKeyboardMarkup(
         keyboard=[[KeyboardButton(text=label) for label in labels[i:i + 2]]
                   for i in range(0, len(labels), 2)],
@@ -80,7 +83,7 @@ def bot_commands() -> list[BotCommand]:
         ("menu", "Показать кнопки"), ("status", "Состояние бота"),
         ("check", "Проверить работу бота"),
         ("today", "Проверить публикации за сегодня"),
-        ("sources", "Отслеживаемые каналы"),
+        ("sources", "Отслеживаемые каналы"), ("channels", "Мои каналы"),
         ("pending", "Каналы на подтверждении"), ("add", "Добавить канал"),
         ("latest", "Последние заказы"), ("top", "Лучшие заказы"),
         ("stats", "Статистика"), ("settings", "Настройки"),
@@ -96,6 +99,23 @@ def parse_channel_list(text: str) -> list[str]:
     if not channels or len(channels) > 20:
         raise ValueError("Укажите от 1 до 20 публичных каналов через пробел")
     return list(dict.fromkeys(channels))
+
+
+def channel_intent(text: str) -> tuple[str, str] | None:
+    value = text.strip().lower().rstrip(".!? ")
+    if re.search(r"(?:покажи|список|какие).*(?:канал|источник)", value):
+        mode = "paused" if "отключ" in value else "approved" if "активн" in value else "all"
+        return "list", mode
+    patterns = (
+        ("off", r"^(?:больше не следи за|перестань мониторить|не следи за|отключи)\s+"),
+        ("on", r"^(?:включи обратно|включи|возобнови|следи за)\s+"),
+    )
+    for action, pattern in patterns:
+        match = re.match(pattern, value)
+        if match:
+            target = value[match.end():].removesuffix(" канал").strip()
+            return (action, target) if target else None
+    return None
 
 
 def candidate_keyboard(channel_id: int) -> InlineKeyboardMarkup:
@@ -222,6 +242,92 @@ def create_router(service) -> Router:
     router.callback_query.middleware(OwnerMiddleware(service.owner_id))
     repo = service.repo
     pending_input: dict[int, tuple[str, int]] = {}
+    shown_channels: dict[int, tuple[datetime, list[int]]] = {}
+
+    def channel_page(mode: str, page: int, user_id: int) -> tuple[str, InlineKeyboardMarkup]:
+        all_channels = repo.monitored_channels()
+        channels = [channel for channel in all_channels if mode == "all" or channel.status == mode]
+        total_pages = max(1, (len(channels) + 4) // 5)
+        page = min(max(page, 1), total_pages)
+        selected = channels[(page - 1) * 5:page * 5]
+        shown_channels[user_id] = (datetime.now(timezone.utc), [channel.id for channel in selected])
+        active = sum(channel.status == "approved" for channel in all_channels)
+        lines = ["📡 Мои каналы", f"Всего: {len(all_channels)} · ✅ активных: {active} · ⏸ отключённых: {len(all_channels) - active}",
+                 f"Страница {page}/{total_pages} · " + {"all": "Все", "approved": "Активные", "paused": "Отключённые"}[mode]]
+        rows = []
+        for number, channel in enumerate(selected, 1):
+            lines.append(f"\n{number}. {channel.title[:120]}\n" +
+                         (f"@{channel.username}" if channel.username else "Приватный канал") + "\n" +
+                         ("💤 Общая пауза площадок" if channel.status == "approved" and service.source_paused(channel)
+                          else "✅ Мониторинг активен" if channel.status == "approved" else "⏸ Мониторинг отключён"))
+            buttons = []
+            if channel.username and re.fullmatch(r"[A-Za-z0-9_]{5,32}", channel.username):
+                buttons.append(InlineKeyboardButton(text=f"{number}. 🔗 Открыть", url=f"https://t.me/{channel.username}"))
+            else:
+                buttons.append(InlineKeyboardButton(text=f"{number}. 🔗 Нет ссылки", callback_data="my:unavailable"))
+            action = "off" if channel.status == "approved" else "on"
+            buttons.append(InlineKeyboardButton(text="⏸ Не следить" if action == "off" else "▶️ Следить",
+                                                callback_data=f"my:{action}:{channel.id}:{mode}:{page}"))
+            rows.append(buttons)
+        if not selected:
+            lines.append("\nКаналов здесь пока нет.")
+        rows.append([InlineKeyboardButton(text=("✅ " if mode == key else "") + label,
+                                          callback_data=f"my:list:{key}:1") for key, label in
+                     (("all", "Все"), ("approved", "Активные"), ("paused", "Отключённые"))])
+        navigation = []
+        if page > 1:
+            navigation.append(InlineKeyboardButton(text="⬅️ Назад", callback_data=f"my:list:{mode}:{page - 1}"))
+        if page < total_pages:
+            navigation.append(InlineKeyboardButton(text="➡️ Далее", callback_data=f"my:list:{mode}:{page + 1}"))
+        if navigation:
+            rows.append(navigation)
+        rows.append([InlineKeyboardButton(text="🏠 Главное меню", callback_data="my:menu")])
+        return "\n".join(lines), InlineKeyboardMarkup(inline_keyboard=rows)
+
+    async def show_channels(message: Message, mode: str = "all", page: int = 1, edit: bool = False,
+                            user_id: int | None = None) -> None:
+        text, keyboard = channel_page(mode, page, user_id or service.owner_id)
+        if edit:
+            try:
+                await message.edit_text(text, reply_markup=keyboard)
+            except TelegramBadRequest as exc:
+                if "message is not modified" not in str(exc).lower():
+                    raise
+        else:
+            await message.answer(text, reply_markup=keyboard)
+
+    def resolve_channel(target: str, user_id: int, enabled: bool) -> list:
+        channels = [channel for channel in repo.monitored_channels()
+                    if channel.status == ("paused" if enabled else "approved")]
+        ordinals = {"первый": 1, "первого": 1, "второй": 2, "второго": 2,
+                    "третий": 3, "третьего": 3, "четвёртый": 4, "четвертого": 4,
+                    "пятый": 5, "пятого": 5}
+        number = ordinals.get(target.split()[0]) if target else None
+        if number is not None:
+            shown = shown_channels.get(user_id)
+            if not shown or (datetime.now(timezone.utc) - shown[0]).total_seconds() > 1800 or number > len(shown[1]):
+                return []
+            return [channel for channel in channels if channel.id == shown[1][number - 1]]
+        target = target.lstrip("@").casefold()
+        exact = [channel for channel in channels if (channel.username or "").casefold() == target
+                 or channel.title.casefold() == target]
+        return exact or [channel for channel in channels if target in channel.title.casefold()]
+
+    async def change_channel(channel_id: int, enabled: bool) -> str:
+        channel = repo.get_channel(channel_id)
+        if channel is None or channel.status not in {"approved", "paused"}:
+            return "Канал не найден в списке отслеживаемых."
+        if channel.status == ("approved" if enabled else "paused"):
+            return "Статус уже установлен."
+        try:
+            changed = await service.set_channel_monitoring(channel_id, enabled)
+        except Exception:
+            log.exception("Переключение канала %s", channel_id)
+            return "Не удалось проверить доступ к каналу. Мониторинг не изменён."
+        if not changed:
+            return "Статус уже изменился. Обнови список."
+        return (f"✅ Мониторинг «{channel.title}» возобновлён." if enabled else
+                f"✅ Канал «{channel.title}» отключён. Новые заказы из него не отслеживаю.")
     def settings_text() -> str:
         return "Уведомления: подходящие IT-варианты с подтверждённым бесплатным откликом. Выбери категории и группы поиска:"
 
@@ -328,22 +434,14 @@ def create_router(service) -> Router:
                              f"новых для базы {new}."
                              + (f" Ошибки в {len(errors)} случаях; попробуй позже ещё раз." if errors else ""))
 
-    @router.message(Command("sources"))
+    @router.message(Command("sources", "channels"))
     async def sources(message: Message):
-        channels = repo.list_channels("approved")
-        if not channels:
-            await message.answer("Одобренных каналов нет")
-            return
         parts = (message.text or "").split()
         try:
-            page = max(1, int(parts[1])) if len(parts) > 1 else 1
+            page = int(parts[1]) if len(parts) > 1 else 1
         except ValueError:
             page = 1
-        selected = channels[(page - 1) * 50:page * 50]
-        await message.answer((f"Источники: страница {page} из {(len(channels) + 49) // 50}\n" +
-                              "\n".join(f"{c.id}. {c.title} · @{c.username}"
-                                        + (" · 💤 пауза" if service.source_paused(c) else "") for c in selected))[:4000]
-                             if selected else "На этой странице нет каналов")
+        await show_channels(message, page=page, user_id=message.from_user.id if message.from_user else None)
 
     @router.message(Command("platforms"))
     async def platforms(message: Message):
@@ -528,6 +626,24 @@ def create_router(service) -> Router:
             saved = repo.set_job_note(job_id, raw) if field == "note" else repo.set_job_amount(job_id, raw)
             await message.answer("Сохранено" if saved else "Заказ не найден")
             return
+        intent = channel_intent(raw)
+        if intent:
+            action, target = intent
+            if action == "list":
+                await show_channels(message, mode=target, user_id=message.from_user.id)
+                return
+            matches = resolve_channel(target, message.from_user.id, action == "on")
+            if len(matches) == 1:
+                await message.answer(await change_channel(matches[0].id, action == "on"))
+                await show_channels(message, user_id=message.from_user.id)
+            elif len(matches) > 1:
+                await message.answer("Нашёл несколько каналов. Выбери нужный:", reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+                    [InlineKeyboardButton(text=f"{channel.title[:35]} · @{channel.username or channel.id}",
+                                          callback_data=f"my:{action}:{channel.id}:all:1")]
+                    for channel in matches[:20]]))
+            else:
+                await message.answer("Канал не найден в нужном статусе. Открой «📡 Мои каналы» и выбери его кнопкой.")
+            return
         if raw.startswith("@") or raw.startswith("https://t.me/"):
             await add_channels(message, raw)
 
@@ -535,6 +651,25 @@ def create_router(service) -> Router:
     async def callbacks(callback: CallbackQuery):
         parts = (callback.data or "").split(":")
         try:
+            if parts[0] == "my":
+                if parts == ["my", "unavailable"]:
+                    await callback.answer("У этого канала нет доступной публичной ссылки", show_alert=True)
+                    return
+                if parts == ["my", "menu"]:
+                    await callback.message.answer("Главное меню", reply_markup=main_menu())
+                    await callback.answer()
+                    return
+                if len(parts) == 4 and parts[1] == "list" and parts[2] in {"all", "approved", "paused"}:
+                    await show_channels(callback.message, parts[2], int(parts[3]), edit=True,
+                                        user_id=callback.from_user.id)
+                    await callback.answer()
+                    return
+                if len(parts) == 5 and parts[1] in {"on", "off"} and parts[3] in {"all", "approved", "paused"}:
+                    result = await change_channel(int(parts[2]), parts[1] == "on")
+                    await show_channels(callback.message, parts[3], int(parts[4]), edit=True,
+                                        user_id=callback.from_user.id)
+                    await callback.answer(result, show_alert=True)
+                    return
             if len(parts) == 2 and parts[0] == "menu" and parts[1] in MENU_LABELS:
                 action = parts[1]
                 await callback.answer()

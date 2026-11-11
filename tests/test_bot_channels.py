@@ -22,14 +22,14 @@ def test_channel_list_rejects_other_text():
 
 def test_main_menu_groups_every_action_and_telegram_command_menu():
     labels = [button.text for row in main_menu().keyboard for button in row]
-    assert labels == ["📋 Заказы", "📡 Каналы", "➕ Добавить канал", "📊 Бот"]
+    assert labels == ["📋 Заказы", "📡 Каналы", "📡 Мои каналы", "➕ Добавить канал", "📊 Бот"]
     assert {action for actions in MENU_SECTIONS.values() for action in actions} == set(MENU_LABELS)
     assert [[button.text for button in row] for row in section_menu("📡 Каналы").keyboard] == [
-        ["📡 Источники", "🕓 Кандидаты"], ["🔎 Найти чаты сейчас", "📡 Эффективность поиска"],
+        ["📡 Мои каналы", "🕓 Кандидаты"], ["🔎 Найти чаты сейчас", "📡 Эффективность поиска"],
         ["🏪 Площадки"], ["← Назад"]
     ]
     assert main_menu().is_persistent is True
-    assert {command.command for command in bot_commands()} >= {"menu", "sources", "add", "settings"}
+    assert {command.command for command in bot_commands()} >= {"menu", "sources", "channels", "add", "settings"}
     assert "discover" not in {command.command for command in bot_commands()}
     assert "➕ Добавить канал" in labels
     assert "🔎 Найти чаты сейчас" in MENU_LABELS.values()

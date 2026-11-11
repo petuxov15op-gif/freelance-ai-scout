@@ -3,7 +3,7 @@ from __future__ import annotations
 from datetime import datetime, timedelta, timezone
 import hashlib
 
-from sqlalchemy import case, func, select
+from sqlalchemy import case, func, select, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import sessionmaker
 
@@ -66,6 +66,10 @@ class Repository:
         with self.factory() as db:
             return list(db.scalars(select(Channel).where(Channel.status == status).order_by(Channel.id)))
 
+    def monitored_channels(self) -> list[Channel]:
+        with self.factory() as db:
+            return list(db.scalars(select(Channel).where(Channel.status.in_(("approved", "paused"))).order_by(Channel.id)))
+
     def get_channel(self, channel_id: int) -> Channel | None:
         with self.factory() as db:
             return db.get(Channel, channel_id)
@@ -93,6 +97,28 @@ class Repository:
             channel.reviewed_at = utcnow()
             if status == "approved":
                 db.add(MonitoringState(channel_id=channel_id, last_message_id=initial_cursor))
+            return True
+
+    def set_monitoring(self, channel_id: int, enabled: bool, latest_cursor: int = 0) -> bool:
+        if latest_cursor < 0:
+            raise ValueError("Курсор сообщения не может быть отрицательным")
+        with transaction(self.factory) as db:
+            channel = db.get(Channel, channel_id)
+            expected = "paused" if enabled else "approved"
+            if channel is None or channel.status != expected:
+                return False
+            if enabled:
+                state = db.get(MonitoringState, channel_id)
+                if state is None:
+                    state = MonitoringState(channel_id=channel_id, last_message_id=latest_cursor)
+                    db.add(state)
+                elif latest_cursor > state.last_message_id:
+                    state.last_message_id = latest_cursor
+                    state.checked_at = utcnow()
+            else:
+                db.execute(update(Message).where(Message.channel_id == channel_id, Message.status == "pending")
+                           .values(status="irrelevant", rejection_reason="channel_paused"))
+            channel.status = "approved" if enabled else "paused"
             return True
 
     def cursor(self, channel_id: int) -> int:
@@ -216,7 +242,9 @@ class Repository:
 
     def job_link(self, job_id: int) -> str | None:
         with self.factory() as db:
-            return db.scalar(select(Message.link).join(JobSource).where(JobSource.job_id == job_id).limit(1))
+            return db.scalar(select(Message.link).join(JobSource).join(Channel, Channel.id == Message.channel_id)
+                             .where(JobSource.job_id == job_id)
+                             .order_by(case((Channel.status == "approved", 0), else_=1), Message.id).limit(1))
 
     def job_original(self, job_id: int) -> str | None:
         with self.factory() as db:
@@ -229,7 +257,8 @@ class Repository:
     def job_channel(self, job_id: int) -> Channel | None:
         with self.factory() as db:
             return db.scalar(select(Channel).join(Message).join(JobSource)
-                             .where(JobSource.job_id == job_id).limit(1))
+                             .where(JobSource.job_id == job_id)
+                             .order_by(case((Channel.status == "approved", 0), else_=1), Message.id).limit(1))
 
     def jobs(self, minimum_score: int = 0, limit: int = 10) -> list[Job]:
         with self.factory() as db:

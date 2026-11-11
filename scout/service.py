@@ -190,7 +190,7 @@ class ScoutService:
             return "running", 0, 0, None
         async with self.discovery_lock:
             now = datetime.now(timezone.utc)
-            channels = [channel for status in ("approved", "pending", "rejected", "blocked")
+            channels = [channel for status in ("approved", "paused", "pending", "rejected", "blocked")
                         for channel in self.repo.list_channels(status)]
             known = {channel.telegram_id for channel in channels}
             seen_examples: list[str] = []
@@ -389,6 +389,14 @@ class ScoutService:
             finally:
                 self.last_monitor_finished = datetime.now(timezone.utc)
 
+    async def set_channel_monitoring(self, channel_id: int, enabled: bool) -> bool:
+        async with self.monitor_lock:
+            channel = self.repo.get_channel(channel_id)
+            if channel is None or channel.status != ("paused" if enabled else "approved"):
+                return False
+            latest = await self.source.latest_message_id(channel) if enabled else 0
+            return self.repo.set_monitoring(channel_id, enabled, latest)
+
     def _save_item(self, channel: Channel, item, advance_cursor: bool = True) -> None:
         from .telegram import outbound_links
         link = f"https://t.me/{channel.username}/{item.id}" if channel.username else None
@@ -432,6 +440,8 @@ class ScoutService:
         for message in self.repo.pending_messages(limit=limit):
             try:
                 channel = self.repo.get_channel(message.channel_id)
+                if channel is None or channel.status != "approved":
+                    continue
                 employment = employment_type(message.text)
                 contact = contact_options(message.text, (message.metadata_json or {}).get("outbound_links"),
                                           channel.username if channel else None,
@@ -487,7 +497,7 @@ class ScoutService:
         message = self.repo.job_message(job_id)
         channel = self.repo.job_channel(job_id)
         job = self.repo.job(job_id)
-        if not job or job.contact_status not in {"direct_free", "platform_free"} or self.source_paused(channel):
+        if not job or channel is None or channel.status != "approved" or job.contact_status not in {"direct_free", "platform_free"} or self.source_paused(channel):
             return
         if not self.repo.claim_notification(job_id, kind):
             return

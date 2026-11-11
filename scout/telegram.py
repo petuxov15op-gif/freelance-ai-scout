@@ -151,7 +151,7 @@ class TelegramSource:
 
     async def latest_message_id(self, channel) -> int:
         await self.ensure_connected()
-        async for message in self.client.iter_messages(channel.username, limit=1):
+        async for message in self.client.iter_messages(channel.username or channel.telegram_id, limit=1):
             return message.id
         return 0
 
