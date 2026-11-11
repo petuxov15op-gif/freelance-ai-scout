@@ -50,6 +50,11 @@ def test_widget_document_and_state_limits(repo):
     html = widget_html().encode("utf-8")
     assert len(html) <= 32768
     assert len(zlib.compress(html, 9)) <= 4096
+    job_html = widget_html("j").encode("utf-8")
+    assert len(job_html) <= 32768
+    assert len(zlib.compress(job_html, 9)) <= 4096
+    assert b"#eaf4ff" in job_html
+    assert b'data-a="j:' in job_html
     assert "fetch(" not in widget_html()
     assert "prefers-reduced-motion" in widget_html()
     assert packed(widget.job(job.id))
@@ -166,12 +171,16 @@ async def test_widget_dispatcher_handles_new_update_without_second_poller(repo):
 
 @pytest.mark.asyncio
 async def test_widget_send_uses_bot_api_and_fallback(repo):
-    seeded(repo)
+    _, job = seeded(repo)
     widget, bot = controller(repo)
     await widget.send("d")
     method = bot.call_args.args[0]
     assert isinstance(method, SendWidget)
     assert method.allow_queries is True
+    await widget.send("j", job.id)
+    method = bot.call_args.args[0]
+    assert method.height == 580
+    assert method.html == widget_html("j")
     bot.side_effect = RuntimeError("unsupported")
     await widget.send("s")
     bot.send_message.assert_awaited()

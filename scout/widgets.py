@@ -107,8 +107,31 @@ if(W){S=read(W.chatData);W.onEvent('chatDataChanged',()=>{S=read(W.chatData);con
 </script>"""
 
 
-def widget_html() -> str:
-    return '<!doctype html><html><head><meta name="viewport" content="width=device-width,initial-scale=1">' + STYLE + '</head><body><div id="app"></div>' + SCRIPT + '</body></html>'
+JOB_STYLE = r"""<style>
+*{box-sizing:border-box}body{margin:0;padding:14px;background:#eaf4ff;color:#10203e;font:14px -apple-system,BlinkMacSystemFont,sans-serif}.wrap{max-width:340px;margin:auto}.top{display:flex;align-items:center;gap:10px;margin:0 2px 13px}.back{font-size:22px;color:#203c6c}.top b{font-size:17px;letter-spacing:-.4px}.card{padding:16px 15px 13px;border:1px solid #fff;border-radius:22px;background:linear-gradient(145deg,#ffffffd9,#f6fbffb8);box-shadow:0 12px 28px #4f8ce824,0 2px 5px #6d93c21a,inset 0 1px #fff;animation:rise .35s ease-out both}.title{font-size:18px;line-height:1.2;letter-spacing:-.45px;font-weight:750;margin:0 0 7px}.desc{font-size:12px;line-height:1.35;color:#425576;margin:0}.tags{display:flex;gap:6px;flex-wrap:wrap;margin:11px 0 13px}.tag{padding:5px 9px;border-radius:20px;background:#dceaff;color:#183767;font-size:11px;font-weight:600}.facts{display:flex;align-items:center;justify-content:space-between;min-height:65px}.budget{display:flex;align-items:center;gap:8px;padding:9px 10px;background:#ffffffa8;border:1px solid #fff;border-radius:12px;box-shadow:0 4px 8px #5f83bd1d;font-weight:750;font-size:14px}.budget svg{color:#286fe7}.score{width:62px;height:62px;filter:drop-shadow(0 4px 5px #277bff40)}.score circle{fill:none;stroke:#dce8fa;stroke-width:6}.score .arc{stroke:#1879ef;stroke-linecap:round;stroke-dasharray:0 176;transform:rotate(-90deg);transform-origin:50% 50%;transition:stroke-dasharray .5s ease-out}.score text{fill:#162a4c;font-size:14px;font-weight:750;text-anchor:middle;dominant-baseline:middle}.source{display:flex;align-items:center;gap:8px;border-top:1px solid #dae7f4;margin-top:12px;padding-top:11px;font-size:11px}.source-icon{color:#2685f9}.source b{display:block;font-size:11px}.source span{display:block;color:#7384a0;font-size:10px}.when{margin-left:auto;color:#71819a}.actions{display:grid;grid-template-columns:1fr 44px 44px;gap:7px;margin:10px 4px 0}.more{display:grid;grid-template-columns:1fr 1fr;gap:7px;margin:8px 4px 0}button{font:inherit;cursor:pointer;transition:transform .18s,box-shadow .18s,background .18s}button:active{transform:scale(.94)}.primary{border:1px solid #2f94ff;border-radius:13px;background:linear-gradient(180deg,#5cb6ff,#0e6ded);color:white;font-weight:700;box-shadow:0 5px 11px #2388f954;min-height:44px}.icon{display:grid;place-items:center;min-height:44px;border:1px solid #fff;border-radius:13px;background:#ffffffc9;color:#1c4e95;box-shadow:0 4px 9px #447ac22e}.icon.on{color:#0868df;background:#ddecff}.icon svg{width:19px;height:19px}.minor{min-height:44px;border:1px solid #ffffffb8;border-radius:11px;background:#ffffff8c;color:#345378;font-size:11px;font-weight:650}.notice{min-height:16px;margin:7px 5px 0;color:#237454;font-size:11px}.notice.bad{color:#b94b44}@keyframes rise{from{opacity:0;transform:translateY(8px)}to{opacity:1;transform:translateY(0)}}@media(prefers-reduced-motion:reduce){*,*:before,*:after{animation:none!important;transition:none!important}}
+</style>"""
+
+JOB_SCRIPT = r"""<script>
+const W=window.TelegramWidget,root=document.getElementById('app');let S=null,busy=false;
+const e=x=>String(x==null?'':x).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+const read=x=>{try{return JSON.parse(x||'null')}catch(_){return null}};
+const wallet='<svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="6" width="18" height="15" rx="3"/><path d="M3 10h18M6 6V4h12"/><path d="M16 14h2"/></svg>';
+const plane='<svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m21 3-7.5 18-3.5-7-7-3.5L21 3ZM10 14l11-11"/></svg>';
+const mark='<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"><path d="M6 3h12v18l-6-4-6 4V3Z"/></svg>';
+const eye='<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M3 3l18 18M10.6 5.1A11 11 0 0 1 12 5c5 0 9 7 9 7a15 15 0 0 1-2.3 3M6.6 6.6C4.3 8 3 12 3 12s4 7 9 7c1 0 2-.3 2.9-.7"/><path d="M10 10a3 3 0 0 0 4 4"/></svg>';
+function notice(t,bad){let n=document.getElementById('notice');if(n){n.textContent=t||'';n.className='notice'+(bad?' bad':'')}}
+function render(){if(!S){root.innerHTML='<div class="card">Открой карточку в Telegram</div>';return}let v=Math.max(0,Math.min(100,Number(S.score)||0));let h='<div class="wrap"><div class="top"><span class="back">‹</span><b>Новый заказ</b></div><div class="card"><h1 class="title">'+e(S.t||'Заказ #'+S.id)+'</h1><p class="desc">'+e(S.d||'Описание заказа не указано')+'</p><div class="tags">';for(let t of S.tags||[])h+='<span class="tag">'+e(t)+'</span>';h+='</div><div class="facts"><div class="budget">'+wallet+e(S.b||'Бюджет не указан')+'</div>';
+if(S.score!=null)h+='<svg class="score" viewBox="0 0 64 64"><circle cx="32" cy="32" r="28"/><circle class="arc" cx="32" cy="32" r="28" style="stroke-dasharray:'+Math.round(v*1.76)+' 176"/><text x="32" y="33">'+v+'%</text></svg>';h+='</div><div class="source"><span class="source-icon">'+plane+'</span><div><b>Источник</b><span>'+e(S.src)+'</span></div><span class="when">'+e(S.when)+'</span></div></div><div class="actions">';
+if(S.url)h+='<button class="primary" data-link="'+e(S.url)+'">'+plane+' Подробнее</button>';else h+='<button class="primary" disabled>Подробнее</button>';
+h+='<button class="icon '+(S.saved?'on':'')+'" aria-label="'+(S.saved?'Убрать из сохранённого':'Сохранить')+'" data-a="j:'+(S.saved?'v':'s')+':'+S.id+'">'+mark+'</button><button class="icon '+(S.hidden?'on':'')+'" aria-label="'+(S.hidden?'Вернуть заказ':'Скрыть заказ')+'" data-a="j:'+(S.hidden?'u':'h')+':'+S.id+'">'+eye+'</button></div><div class="more"><button class="minor" data-a="j:a:'+S.id+'">ИИ-анализ</button><button class="minor" data-a="j:d:'+S.id+'">Подготовить отклик</button></div><div id="notice" class="notice"></div></div>';root.innerHTML=h;if(S.err)notice(S.err,true)}
+document.addEventListener('click',ev=>{let b=ev.target.closest('button');if(!b||b.disabled||busy)return;if(b.dataset.link){if(W&&W.openLink)W.openLink(b.dataset.link);return}let a=b.dataset.a;if(!a||!W)return;busy=true;notice('Сохраняю…');W.request(a).then(r=>{busy=false;let v=read(r&&r.result);if(v&&v.k){S=v;render()}else if(v&&v.wait){notice('Обновляю…')}else notice(v&&v.error||v&&v.ok||'Готово',!!(v&&v.error))}).catch(()=>{busy=false;notice('Не удалось выполнить действие. Повтори.',true)})});
+if(W){S=read(W.chatData);W.onEvent('chatDataChanged',()=>{S=read(W.chatData);render()})}render();
+</script>"""
+
+
+def widget_html(kind: str = "d") -> str:
+    style, script = (JOB_STYLE, JOB_SCRIPT) if kind == "j" else (STYLE, SCRIPT)
+    return '<!doctype html><html><head><meta name="viewport" content="width=device-width,initial-scale=1">' + style + '</head><body><div id="app"></div>' + script + '</body></html>'
 
 
 def packed(state: dict) -> str:
@@ -179,8 +202,8 @@ class WidgetController:
             await self.bot.send_message(self.owner_id, "Заказ не найден")
             return
         try:
-            await self.bot(SendWidget(chat_id=self.owner_id, html=widget_html(), chat_data=packed(state),
-                                      width=340, height={"d": 570, "j": 500, "s": 600}[kind],
+            await self.bot(SendWidget(chat_id=self.owner_id, html=widget_html(kind), chat_data=packed(state),
+                                      width=340, height={"d": 570, "j": 580, "s": 600}[kind],
                                       caption={"d": "Панель Freelance AI Scout", "j": "Карточка заказа", "s": "Источники"}[kind]))
         except Exception:
             log.exception("Не удалось отправить Telegram Widget %s", kind)
