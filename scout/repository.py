@@ -264,11 +264,6 @@ class Repository:
         with self.factory() as db:
             return list(db.scalars(select(Job).where(Job.score >= minimum_score).order_by(Job.created_at.desc()).limit(limit)))
 
-    def jobs_needing_contact(self, limit: int = 5) -> list[Job]:
-        with self.factory() as db:
-            return list(db.scalars(select(Job).where(Job.score >= 75, Job.contact_status.in_(("unknown", "none")))
-                                   .order_by(Job.score.desc(), Job.created_at.desc()).limit(limit)))
-
     def pending_instant_jobs(self, minimum_score: int) -> list[Job]:
         started_at = datetime.fromisoformat(self.setting("instant_notifications_start_at"))
         with self.factory() as db:

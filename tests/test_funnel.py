@@ -74,17 +74,6 @@ def test_analytics_counts_unique_jobs_and_manual_feedback(repo):
     assert repo.top_queries(7) == [("python bot", 1)]
 
 
-def test_unknown_contacts_are_available_in_separate_review(repo):
-    channel = repo.candidate(1, "jobs00001", "Jobs", "", None, 70, "", [])
-    repo.transition_channel(channel.id, "approved")
-    message = repo.save_message(channel.id, 1, "Нужен сайт", None, datetime.now(timezone.utc), {})
-    job, _ = repo.attach_job(message)
-    repo.save_analysis(job.id, "deep", "test", {"title": "Сайт", "score": 85})
-    assert [item.id for item in repo.jobs_needing_contact()] == [job.id]
-    repo.set_job_details(job.id, "one_time_project", {"status": "direct_free", "method": "Telegram", "url": "https://t.me/client12345"})
-    assert repo.jobs_needing_contact() == []
-
-
 def test_alembic_upgrade_preserves_existing_ids_and_feedback(tmp_path):
     url = f"sqlite:///{tmp_path / 'existing.db'}"
     config = Config("alembic.ini")
