@@ -317,6 +317,26 @@ async def test_it_project_must_be_feasible_with_codex(repo):
 
 
 @pytest.mark.asyncio
+async def test_senior_devops_role_is_not_notified_even_with_permissive_ai(repo):
+    channel = repo.candidate(100, "scoutjobs", "Jobs", "", None, 70, "", [])
+    repo.transition_channel(channel.id, "approved")
+
+    class Source(FakeSource):
+        async def messages(self, channel, min_id):
+            yield SimpleNamespace(id=1, raw_text="Ищем Senior DevOps для настройки серверов и API. Пишите @client12345",
+                                  date=datetime.now(timezone.utc), media=None, fwd_from=None)
+
+    ai = SimpleNamespace(ask=AsyncMock())
+    bot = SimpleNamespace(send_message=AsyncMock())
+    service = ScoutService(repo, Source(), ai, bot, 1)
+    await service.monitor()
+    assert repo.stats()["jobs"] == 0
+    assert repo.rejection_counts() == [("requires_verified_expertise", 1)]
+    ai.ask.assert_not_awaited()
+    bot.send_message.assert_not_awaited()
+
+
+@pytest.mark.asyncio
 async def test_telegram_outage_keeps_cursor(repo):
     channel = repo.candidate(100, "scoutjobs", "Jobs", "", None, 70, "", [])
     repo.transition_channel(channel.id, "approved")

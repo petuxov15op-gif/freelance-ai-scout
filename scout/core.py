@@ -139,6 +139,12 @@ def employment_type(text: str) -> str:
     return "one_time_project"
 
 
+def high_risk_role(text: str) -> bool:
+    value = normalize_text(text)
+    return bool(re.search(r"\b(?:senior|lead\s+developer|сеньор|ведущ\w*\s+разработчик|devops|"
+                          r"information\s+security|cybersecurity|информационн\w*\s+безопасност|пентест)", value))
+
+
 def contact_options(text: str, links: list[dict] | None = None, source_username: str | None = None,
                     author_username: str | None = None) -> dict:
     """Classify only contact paths evidenced by the announcement or its entities."""

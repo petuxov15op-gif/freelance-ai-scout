@@ -7,7 +7,7 @@ from alembic import command
 from alembic.config import Config
 from sqlalchemy import create_engine, text
 
-from scout.core import contact_options, employment_type
+from scout.core import contact_options, employment_type, high_risk_role
 from scout.bot import create_router
 from scout.service import ScoutService
 
@@ -17,6 +17,8 @@ def test_employment_and_contacts_from_text_and_entities():
     assert employment_type("Регулярные задачи Python для агентства") == "recurring_project"
     assert employment_type("Подработка Python 3 часа в день") == "part_time_role"
     assert employment_type("Вакансия Python в штат") == "full_time_role"
+    assert high_risk_role("Вакансия Senior DevOps инженера")
+    assert not high_risk_role("Нужен Python-бот для кафе")
     assert contact_options("Пишите @client12345")["status"] == "direct_free"
     assert contact_options("Отклик: jobs@example.com")["method"] == "Email"
     assert contact_options("Нужен бот", [{"label": "Написать", "url": "https://t.me/client12345"}])["status"] == "direct_free"
@@ -66,6 +68,17 @@ def test_analytics_counts_unique_jobs_and_manual_feedback(repo):
                       "replied_from_applied": 1, "won_from_applied": 0}
     assert repo.job(job.id).applied_at and repo.job(job.id).replied_at
     assert repo.top_channels() == [("jobs00001", 1, 1, 1, 0)]
+
+
+def test_unknown_contacts_are_available_in_separate_review(repo):
+    channel = repo.candidate(1, "jobs00001", "Jobs", "", None, 70, "", [])
+    repo.transition_channel(channel.id, "approved")
+    message = repo.save_message(channel.id, 1, "Нужен сайт", None, datetime.now(timezone.utc), {})
+    job, _ = repo.attach_job(message)
+    repo.save_analysis(job.id, "deep", "test", {"title": "Сайт", "score": 85})
+    assert [item.id for item in repo.jobs_needing_contact()] == [job.id]
+    repo.set_job_details(job.id, "one_time_project", {"status": "direct_free", "method": "Telegram", "url": "https://t.me/client12345"})
+    assert repo.jobs_needing_contact() == []
 
 
 def test_alembic_upgrade_preserves_existing_ids_and_feedback(tmp_path):

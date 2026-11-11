@@ -15,13 +15,14 @@ from .telegram import parse_public_channel
 log = logging.getLogger(__name__)
 
 MENU_SECTIONS = {
-    "📋 Заказы": ("latest", "top"),
+    "📋 Заказы": ("latest", "top", "needs_contact"),
     "📡 Каналы": ("sources", "pending", "discover", "insights", "platforms"),
     "📊 Бот": ("status", "check", "today", "stats", "analytics", "settings"),
 }
 MENU_LABELS = {
     "latest": "📋 Последние",
     "top": "⭐ Лучшие",
+    "needs_contact": "⚠️ Уточнить отклик",
     "sources": "📡 Источники",
     "pending": "🕓 Кандидаты",
     "discover": "🔎 Найти чаты сейчас",
@@ -46,6 +47,7 @@ MENU_ACTIONS = {
     "➕ Добавить канал": "add",
     "📋 Заказы": "latest",
     "⭐ Лучшие": "top",
+    "⚠️ Уточнить отклик": "needs_contact",
     "📊 Статус": "status",
     "🩺 Проверить": "check",
     "🔄 Проверить сегодня": "today",
@@ -397,6 +399,20 @@ def create_router(service) -> Router:
         jobs = sorted(repo.jobs(60, 50), key=lambda item: item.score or 0, reverse=True)[:10]
         await message.answer("\n".join(f"#{j.id} · {j.score} · {j.title}" for j in jobs)[:4000] or "Подходящих заказов пока нет")
 
+    @router.message(Command("needs_contact"))
+    async def needs_contact(message: Message):
+        jobs = repo.jobs_needing_contact()
+        if not jobs:
+            await message.answer("Предложений с высоким рейтингом и неподтверждённым откликом нет")
+            return
+        for job in jobs:
+            link = repo.job_link(job.id)
+            analysis = repo.analysis(job.id)
+            if not analysis:
+                continue
+            await message.answer(job_text(job, analysis, link)[:4000],
+                                 reply_markup=job_keyboard(job.id, link, job.status))
+
     @router.message(Command("stats"))
     async def stats(message: Message):
         values = repo.stats()
@@ -494,7 +510,8 @@ def create_router(service) -> Router:
             await message.answer("Пришлите @имя канала или ссылку t.me. Можно несколько через пробел.")
             return
         handlers = {"sources": sources, "pending": pending, "platforms": platforms,
-                    "latest": latest, "top": top, "status": status, "check": check, "today": today, "discover": discover,
+                    "latest": latest, "top": top, "needs_contact": needs_contact,
+                    "status": status, "check": check, "today": today, "discover": discover,
                     "stats": stats, "analytics": analytics, "insights": insights, "settings": settings}
         await handlers[action](message)
 
@@ -518,7 +535,8 @@ def create_router(service) -> Router:
                 action = parts[1]
                 await callback.answer()
                 handlers = {"sources": sources, "pending": pending, "platforms": platforms, "latest": latest,
-                            "top": top, "status": status, "check": check, "today": today,
+                            "top": top, "needs_contact": needs_contact,
+                            "status": status, "check": check, "today": today,
                             "discover": discover, "stats": stats, "analytics": analytics,
                             "insights": insights, "settings": settings}
                 await handlers[action](callback.message)
