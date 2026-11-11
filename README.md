@@ -8,11 +8,11 @@ A personal Telegram bot that monitors owner-approved channels for relevant freel
 
 - Adds a public Telegram channel only after the owner confirms it in the bot's menu.
 - Checks approved channels every 10 minutes and stores progress in SQLite so posts can be processed across restarts.
-- Continuously uses Telegram's free global post searches to find public channels with recent software requests and a direct Telegram contact, then screens source activity within three days and sends candidates in review digests of up to five chats. It checks the remaining free quota and resumes when Telegram says it resets; it never authorizes Stars spending.
-- Filters out unrelated remote jobs and posts without a concrete software task. One-off software projects do not need to mention AI. Ongoing roles must explicitly involve AI-assisted development.
-- Pauses audited sources without direct replies and skips posts without a direct Telegram contact before AI analysis. The owner can resume them with **Channels → Platforms**; monitoring starts at fresh posts when re-enabled.
-- Uses OpenRouter for structured analysis of candidate posts and delivers every qualifying opportunity with a direct contact without a score threshold.
-- Groups exact and similar reposts, supports feedback, and prepares reply drafts for the owner's review.
+- Searches public chats by name and, when the user account permits it, public posts within Telegram's free search quota. It checks the quota, obeys FloodWait, and never authorizes Stars spending. New sources still require owner approval.
+- Filters for concrete software tasks and realistic delivery with Codex plus manual verification. AI-assisted development need not appear in the client's post. One-time, recurring, and part-time work are enabled by default; full-time roles are off by default.
+- Recognizes Telegram contacts, hidden links, email, and application forms. Only confirmed free contact paths enter instant notifications; paid and unconfirmed paths do not fill the main feed. Audited platform sources remain paused by default and can be resumed with **Channels → Platforms**.
+- Uses OpenRouter for structured analysis and sends every qualifying opportunity without a score threshold. Search queries are grouped and prioritized using observed source, job, application, and reply outcomes.
+- Groups reposts when the contact or source supports the match, tracks rejection reasons and manual application statuses, shows 7-day, 30-day, and all-time analytics, and prepares reply drafts for owner review.
 
 The bot does not join channels on its own or send applications to clients.
 
@@ -77,7 +77,7 @@ The named `scout_data` volume holds the SQLite database and Telegram session. Pr
 
 ## Using the bot
 
-Send `/start` to show the four-button menu: **Jobs**, **Channels**, **Add channel**, and **Bot**. Tap a section to switch the bottom keyboard to its actions; use **Back** to return. The bot keeps the message that carries the keyboard and removes your navigation tap from the chat. **Channels** includes **Find chats now**, which requests a search while free quota remains. To add a channel, send a public `@username` or `t.me` link and confirm **Add** on its card. Commands include `/status`, `/sources`, `/pending`, `/latest`, `/top`, `/stats`, `/settings`, and `/add`.
+Send `/start` to show the four-button menu: **Jobs**, **Channels**, **Add channel**, and **Bot**. Tap a section to switch the bottom keyboard to its actions; use **Back** to return. **Channels** includes **Find chats now** and **Search performance**. **Bot → Settings** toggles employment categories and search groups; **Bot → Applications** shows analytics. To add a channel, send a public `@username` or `t.me` link and confirm **Add** on its card. Job cards let you change status, add a note or amount, and prepare a reply draft. Commands include `/status`, `/sources`, `/pending`, `/latest`, `/top`, `/stats`, `/analytics`, `/settings`, and `/add`.
 
 ## Tests
 
