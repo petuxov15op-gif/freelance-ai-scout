@@ -4,7 +4,7 @@ from datetime import datetime, timezone
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
-from scout.bot import (MENU_LABELS, MENU_SECTIONS, bot_commands, candidate_digest_keyboard,
+from scout.bot import (MENU_ACTIONS, MENU_LABELS, MENU_SECTIONS, bot_commands, candidate_digest_keyboard,
                        create_router, health_text, main_menu, parse_channel_list, section_menu)
 from scout.service import ScoutService
 
@@ -25,8 +25,8 @@ def test_main_menu_groups_every_action_and_telegram_command_menu():
     assert labels == ["📋 Заказы", "📡 Каналы", "📡 Мои каналы", "➕ Добавить канал", "📊 Бот"]
     assert {action for actions in MENU_SECTIONS.values() for action in actions} == set(MENU_LABELS)
     assert [[button.text for button in row] for row in section_menu("📡 Каналы").keyboard] == [
-        ["📡 Мои каналы", "✨ Виджет источников"], ["🕓 Кандидаты", "🔎 Найти чаты сейчас"],
-        ["📡 Эффективность поиска", "🏪 Площадки"], ["← Назад"]
+        ["📡 Мои каналы", "🕓 Кандидаты"], ["🔎 Найти чаты сейчас", "📡 Эффективность поиска"],
+        ["🏪 Площадки"], ["← Назад"]
     ]
     assert main_menu().is_persistent is True
     assert {command.command for command in bot_commands()} >= {"menu", "sources", "channels", "add", "settings"}
@@ -36,6 +36,9 @@ def test_main_menu_groups_every_action_and_telegram_command_menu():
     assert "🩺 Проверить" in MENU_LABELS.values()
     assert "check" in {command.command for command in bot_commands()}
     assert all("Поиск каналов" not in label for label in labels)
+    assert all("✨" not in label for label in MENU_LABELS.values())
+    assert {MENU_ACTIONS[label] for label in ("✨ Панель", "✨ Карточки заказов", "✨ Виджет источников")} == {
+        "status", "latest", "sources"}
 
 
 @pytest.mark.asyncio
@@ -96,7 +99,7 @@ async def test_menu_navigation_keeps_keyboard_message_and_removes_button_tap(rep
     await handler(message)
     submenu = message.answer.await_args.kwargs["reply_markup"]
     assert [[button.text for button in row] for row in submenu.keyboard] == [
-        ["📋 Последние", "✨ Карточки заказов"], ["⭐ Лучшие", "⚠️ Уточнить отклик"], ["← Назад"]]
+        ["📋 Последние", "⭐ Лучшие"], ["⚠️ Уточнить отклик"], ["← Назад"]]
     assert message.answer.await_args.args == ("Выбери действие",)
     message.delete.assert_awaited_once_with()
 

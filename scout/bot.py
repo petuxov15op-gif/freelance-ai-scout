@@ -17,14 +17,11 @@ from .telegram import parse_public_channel
 log = logging.getLogger(__name__)
 
 MENU_SECTIONS = {
-    "📋 Заказы": ("latest", "cards", "top", "needs_contact"),
-    "📡 Каналы": ("sources", "source_widgets", "pending", "discover", "insights", "platforms"),
-    "📊 Бот": ("panel", "status", "check", "today", "stats", "analytics", "settings"),
+    "📋 Заказы": ("latest", "top", "needs_contact"),
+    "📡 Каналы": ("sources", "pending", "discover", "insights", "platforms"),
+    "📊 Бот": ("status", "check", "today", "stats", "analytics", "settings"),
 }
 MENU_LABELS = {
-    "panel": "✨ Панель",
-    "cards": "✨ Карточки заказов",
-    "source_widgets": "✨ Виджет источников",
     "latest": "📋 Последние",
     "top": "⭐ Лучшие",
     "needs_contact": "⚠️ Уточнить отклик",
@@ -46,9 +43,9 @@ BACK_LABEL = "← Назад"
 # Keep accepting taps from keyboards sent before the menu update.
 MENU_ACTIONS = {
     "📡 Источники": "sources",
-    "✨ Панель": "panel",
-    "✨ Карточки заказов": "cards",
-    "✨ Виджет источников": "source_widgets",
+    "✨ Панель": "status",
+    "✨ Карточки заказов": "latest",
+    "✨ Виджет источников": "sources",
     "📡 Мои каналы": "sources",
     "🕓 Кандидаты": "pending",
     "🔎 Найти чаты сейчас": "discover",
@@ -94,8 +91,6 @@ def bot_commands() -> list[BotCommand]:
         ("latest", "Последние заказы"), ("top", "Лучшие заказы"),
         ("stats", "Статистика"), ("settings", "Настройки"),
         ("analytics", "Аналитика откликов"),
-        ("panel", "Интерактивная панель"), ("cards", "Карточки заказов"),
-        ("sourcewidgets", "Интерактивные источники"),
     )]
 
 
@@ -504,22 +499,6 @@ def create_router(service) -> Router:
         jobs = repo.jobs()
         await message.answer("\n".join(f"{JOB_STATUS_LABELS.get(j.status, '🆕 Новый')} · #{j.id} · {j.score} · {j.title}" for j in jobs)[:4000] or "Заказов пока нет")
 
-    @router.message(Command("panel"))
-    async def panel(message: Message):
-        await service.widgets.send("d")
-
-    @router.message(Command("cards"))
-    async def cards(message: Message):
-        jobs = repo.widget_jobs()
-        if not jobs:
-            await message.answer("Заказов пока нет")
-        for job in jobs:
-            await service.widgets.send("j", job.id)
-
-    @router.message(Command("sourcewidgets"))
-    async def source_widgets(message: Message):
-        await service.widgets.send("s")
-
     @router.message(Command("top"))
     async def top(message: Message):
         jobs = sorted(repo.jobs(60, 50), key=lambda item: item.score or 0, reverse=True)[:10]
@@ -635,9 +614,8 @@ def create_router(service) -> Router:
         if action == "add":
             await message.answer("Пришлите @имя канала или ссылку t.me. Можно несколько через пробел.")
             return
-        handlers = {"sources": sources, "source_widgets": source_widgets, "pending": pending, "platforms": platforms,
-                    "latest": latest, "cards": cards, "top": top, "needs_contact": needs_contact,
-                    "panel": panel,
+        handlers = {"sources": sources, "pending": pending, "platforms": platforms,
+                    "latest": latest, "top": top, "needs_contact": needs_contact,
                     "status": status, "check": check, "today": today, "discover": discover,
                     "stats": stats, "analytics": analytics, "insights": insights, "settings": settings}
         await handlers[action](message)
@@ -698,8 +676,8 @@ def create_router(service) -> Router:
             if len(parts) == 2 and parts[0] == "menu" and parts[1] in MENU_LABELS:
                 action = parts[1]
                 await callback.answer()
-                handlers = {"sources": sources, "source_widgets": source_widgets, "pending": pending, "platforms": platforms, "latest": latest,
-                            "cards": cards, "top": top, "needs_contact": needs_contact, "panel": panel,
+                handlers = {"sources": sources, "pending": pending, "platforms": platforms, "latest": latest,
+                            "top": top, "needs_contact": needs_contact,
                             "status": status, "check": check, "today": today,
                             "discover": discover, "stats": stats, "analytics": analytics,
                             "insights": insights, "settings": settings}

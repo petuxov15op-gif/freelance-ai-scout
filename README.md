@@ -77,17 +77,7 @@ The named `scout_data` volume holds the SQLite database and Telegram session. Pr
 
 ## Using the bot
 
-Send `/start` to show the five-button menu: **Jobs**, **Channels**, **My channels**, **Add channel**, and **Bot**. Tap a section to switch the bottom keyboard to its actions; use **Back** to return. **Channels** includes **Find chats now** and **Search performance**. **Bot → Settings** toggles employment categories and search groups; **Bot → Applications** shows analytics. To add a channel, send a public `@username` or `t.me` link and confirm **Add** on its card. Job cards let you change status, add a note or amount, and prepare a reply draft. Commands include `/status`, `/sources`, `/pending`, `/latest`, `/top`, `/stats`, `/analytics`, `/settings`, and `/add`.
-
-### Telegram Widgets
-
-The bottom menu now offers **Bot → Panel**, **Jobs → Job cards**, and **Channels → Source widget**. The same views are available as `/panel`, `/cards`, and `/sourcewidgets`. Every qualifying instant notification keeps its ordinary text and buttons and also attempts to send an interactive job card. If the Bot API rejects `sendWidget`, the existing text notification remains usable; the menu views direct you to the existing commands.
-
-Widgets work in a private chat with the owner. The panel uses real database counts; “New” covers the last 24 hours, while other counts cover all stored records. Job cards use the saved AI analysis and original post. Save and Hide persist separate flags, so an application status such as Applied is preserved. Analysis opens a full bot message, and Draft asks the existing AI service to prepare a reply. Source switches call the existing monitoring service. Remove requires a second tap, stops monitoring, and preserves all stored messages and jobs. A removed source can be submitted again for approval from the normal Add channel flow.
-
-The installed aiogram release does not model `widget_query`, so `scout/widgets.py` adds a small Bot API method adapter and routes that update through the existing polling process. The widget document uses inline CSS/JS and is under Telegram's 32 KB HTML and 4 KB zlib limits. No token or API key enters the widget. Existing text commands and inline buttons remain the fallback for unsupported clients.
-
-To check locally, run `pytest -q`; it covers widget size, permission checks, database actions, source confirmation, and fallback. For a live check, use a Telegram client with Widgets support and the owner's private bot chat. Open all three menu views; save and hide a job, request its analysis and draft, pause and resume a source, and confirm removal on a disposable source. Reopen each widget to verify the saved state. Check both Telegram light and dark themes and reduced motion. Do this only on an isolated bot token or after stopping any other polling instance. Live client rendering and Bot API behavior cannot be proven by the local test suite.
+Send `/start` to show the four-button menu: **Jobs**, **Channels**, **Add channel**, and **Bot**. Tap a section to switch the bottom keyboard to its actions; use **Back** to return. **Channels** includes **Find chats now** and **Search performance**. **Bot → Settings** toggles employment categories and search groups; **Bot → Applications** shows analytics. To add a channel, send a public `@username` or `t.me` link and confirm **Add** on its card. Job cards let you change status, add a note or amount, and prepare a reply draft. Commands include `/status`, `/sources`, `/pending`, `/latest`, `/top`, `/stats`, `/analytics`, `/settings`, and `/add`.
 
 ## Tests
 

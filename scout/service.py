@@ -509,8 +509,3 @@ class ScoutService:
         except Exception:
             self.repo.release_notification(job_id, kind)
             raise
-        if hasattr(self, "widgets"):
-            try:
-                await self.widgets.send("j", job_id, fallback=False)
-            except Exception:
-                log.exception("Не удалось отправить widget заказа %s", job_id)

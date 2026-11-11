@@ -20,7 +20,6 @@ from .db import make_engine, make_session_factory
 from .repository import Repository
 from .service import ScoutService
 from .telegram import TelegramSource
-from .widgets import WidgetController, WidgetDispatcher
 
 
 async def run() -> None:
@@ -44,8 +43,7 @@ async def run() -> None:
         draft_model=config.draft_model,
     )
     service = ScoutService(repo, source, ai, bot, config.owner_id)
-    service.widgets = WidgetController(service)
-    dispatcher = WidgetDispatcher(service.widgets.handle)
+    dispatcher = Dispatcher()
     dispatcher.include_router(create_router(service))
     scheduler = AsyncIOScheduler(timezone=ZoneInfo("Asia/Yekaterinburg"))
     scheduler.add_job(service.monitor, "interval", minutes=10, id="monitor", max_instances=1, coalesce=True)
@@ -74,8 +72,7 @@ async def run() -> None:
         initial_monitor = asyncio.create_task(service.monitor())
         if config.discovery_enabled:
             discovery_task = asyncio.create_task(discovery_loop())
-        await dispatcher.start_polling(bot, handle_signals=True,
-                                       allowed_updates=[*dispatcher.resolve_used_update_types(), "widget_query"])
+        await dispatcher.start_polling(bot, handle_signals=True)
     finally:
         for task in (initial_monitor, discovery_task):
             if task:
