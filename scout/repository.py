@@ -365,20 +365,36 @@ class Repository:
                     "won_from_applied": db.scalar(select(func.count(func.distinct(Job.id))).where(
                         Job.id.in_(applied_ids), Job.id.in_(won_ids))) or 0}
 
-    def top_channels(self, limit: int = 5) -> list[tuple[str, int, int, int, int]]:
+    def top_channels(self, limit: int = 5, days: int | None = None) -> list[tuple[str, int, int, int, int]]:
         with self.factory() as db:
             unique = func.count(func.distinct(JobSource.job_id))
             applied = func.count(func.distinct(case((Feedback.action == "applied", Job.id))))
             replied = func.count(func.distinct(case((Feedback.action == "replied", Job.id))))
             won = func.count(func.distinct(case((Feedback.action == "won", Job.id))))
-            return [(name or "?", count, apps, replies, wins) for name, count, apps, replies, wins in db.execute(
-                select(Channel.username, unique, applied, replied, won)
+            query = (select(Channel.username, unique, applied, replied, won)
                 .join(Message, Message.channel_id == Channel.id)
                 .join(JobSource, JobSource.message_id == Message.id)
                 .join(Job, Job.id == JobSource.job_id)
                 .outerjoin(Feedback, Feedback.job_id == Job.id)
                 .where(Job.contact_status.in_(("direct_free", "platform_free")))
-                .group_by(Channel.id).order_by((won * 10 + replied * 4 + applied * 2 + unique).desc()).limit(limit))]
+                .group_by(Channel.id).order_by((won * 10 + replied * 4 + applied * 2 + unique).desc()).limit(limit))
+            if days:
+                query = query.where(Job.created_at >= utcnow() - timedelta(days=days))
+            return [(name or "?", count, apps, replies, wins) for name, count, apps, replies, wins in db.execute(query)]
+
+    def top_queries(self, days: int | None = None, limit: int = 3) -> list[tuple[str, int]]:
+        with self.factory() as db:
+            unique = func.count(func.distinct(Job.id))
+            query = (select(ChannelCandidate.query, unique)
+                     .join(Channel, Channel.id == ChannelCandidate.channel_id)
+                     .join(Message, Message.channel_id == Channel.id)
+                     .join(JobSource, JobSource.message_id == Message.id)
+                     .join(Job, Job.id == JobSource.job_id)
+                     .where(ChannelCandidate.query.is_not(None), Job.contact_status.in_(("direct_free", "platform_free")))
+                     .group_by(ChannelCandidate.query).order_by(unique.desc()).limit(limit))
+            if days:
+                query = query.where(Job.created_at >= utcnow() - timedelta(days=days))
+            return list(db.execute(query))
 
     def rejection_counts(self, limit: int = 5) -> list[tuple[str, int]]:
         with self.factory() as db:

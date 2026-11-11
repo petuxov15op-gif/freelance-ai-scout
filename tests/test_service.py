@@ -317,13 +317,17 @@ async def test_it_project_must_be_feasible_with_codex(repo):
 
 
 @pytest.mark.asyncio
-async def test_senior_devops_role_is_not_notified_even_with_permissive_ai(repo):
+@pytest.mark.parametrize("announcement, reason", [
+    ("Ищем Senior DevOps для настройки серверов и API. Пишите @client12345", "requires_verified_expertise"),
+    ("Нужен Python-разработчик, работа только офис. Пишите @client12345", "office_required"),
+])
+async def test_high_risk_or_office_role_is_not_notified_even_with_permissive_ai(repo, announcement, reason):
     channel = repo.candidate(100, "scoutjobs", "Jobs", "", None, 70, "", [])
     repo.transition_channel(channel.id, "approved")
 
     class Source(FakeSource):
         async def messages(self, channel, min_id):
-            yield SimpleNamespace(id=1, raw_text="Ищем Senior DevOps для настройки серверов и API. Пишите @client12345",
+            yield SimpleNamespace(id=1, raw_text=announcement,
                                   date=datetime.now(timezone.utc), media=None, fwd_from=None)
 
     ai = SimpleNamespace(ask=AsyncMock())
@@ -331,7 +335,7 @@ async def test_senior_devops_role_is_not_notified_even_with_permissive_ai(repo):
     service = ScoutService(repo, Source(), ai, bot, 1)
     await service.monitor()
     assert repo.stats()["jobs"] == 0
-    assert repo.rejection_counts() == [("requires_verified_expertise", 1)]
+    assert repo.rejection_counts() == [(reason, 1)]
     ai.ask.assert_not_awaited()
     bot.send_message.assert_not_awaited()
 

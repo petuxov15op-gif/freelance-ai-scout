@@ -10,7 +10,7 @@ from aiogram import Bot
 from telethon import types
 from telethon.errors import FloodWaitError, RPCError
 
-from .core import (contact_options, employment_type, explicit_it_task, high_risk_role,
+from .core import (contact_options, employment_type, explicit_it_task, high_risk_role, office_required,
                    likely_job, mentions_platform, potential_job, similar)
 from .models import Channel
 from .repository import Repository
@@ -440,6 +440,7 @@ class ScoutService:
                           "not_job" if not potential_job(message.text) else
                           "no_it_signal" if not explicit_it_task(message.text) else
                           "requires_verified_expertise" if high_risk_role(message.text) else
+                          "office_required" if office_required(message.text) else
                           "category_disabled" if self.repo.setting("employment_" + employment,
                               "false" if employment == "full_time_role" else "true") != "true" else None)
                 if reason:

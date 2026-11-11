@@ -145,6 +145,12 @@ def high_risk_role(text: str) -> bool:
                           r"information\s+security|cybersecurity|информационн\w*\s+безопасност|пентест)", value))
 
 
+def office_required(text: str) -> bool:
+    value = normalize_text(text)
+    return any(term in value for term in ("только офис", "работа в офисе", "обязательное присутствие в офисе",
+                                         "офисный формат", "onsite only", "on site only"))
+
+
 def contact_options(text: str, links: list[dict] | None = None, source_username: str | None = None,
                     author_username: str | None = None) -> dict:
     """Classify only contact paths evidenced by the announcement or its entities."""

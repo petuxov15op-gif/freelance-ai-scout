@@ -243,12 +243,16 @@ def create_router(service) -> Router:
         applied, replied, won = values["applied"], values["replied"], values["won"]
         response_rate = f"{values['replied_from_applied'] / applied:.0%}" if applied else "Недостаточно данных"
         win_rate = f"{values['won_from_applied'] / applied:.0%}" if applied else "Недостаточно данных"
+        sources = repo.top_channels(3, days)
+        queries = repo.top_queries(days)
         return (f"Аналитика: {days or 'всё время'} дн.\n"
                 f"Публикаций найдено: {values['found']}\n"
                 f"Уникальных заказов: {values['jobs']}\n"
                 f"Подходящих с бесплатным откликом: {values['unique']}\n"
                 f"Откликнулся: {applied} · Ответов: {replied} · Получил заказ: {won}\n"
-                f"Доля ответов: {response_rate} · Доля выигранных: {win_rate}")
+                f"Доля ответов: {response_rate} · Доля выигранных: {win_rate}\n"
+                "Полезные источники: " + (", ".join(f"@{name} ({count})" for name, count, *_ in sources) or "Недостаточно данных") + "\n"
+                "Поисковые запросы: " + (", ".join(f"{phrase} ({count})" for phrase, count in queries) or "Недостаточно данных"))
 
     def analytics_keyboard() -> InlineKeyboardMarkup:
         return InlineKeyboardMarkup(inline_keyboard=[[
