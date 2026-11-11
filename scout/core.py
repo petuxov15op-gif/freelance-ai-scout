@@ -147,6 +147,8 @@ def high_risk_role(text: str) -> bool:
 
 def office_required(text: str) -> bool:
     value = normalize_text(text)
+    if any(term in value for term in ("без работы в офисе", "работа в офисе не требуется", "офис не обязателен")):
+        return False
     return any(term in value for term in ("только офис", "работа в офисе", "обязательное присутствие в офисе",
                                          "офисный формат", "onsite only", "on site only"))
 

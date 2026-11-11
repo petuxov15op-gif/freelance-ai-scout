@@ -21,6 +21,7 @@ def test_employment_and_contacts_from_text_and_entities():
     assert not high_risk_role("Нужен Python-бот для кафе")
     assert office_required("Нужен разработчик, работа в офисе")
     assert not office_required("Нужен разработчик, удалённо")
+    assert not office_required("Нужен разработчик, работа в офисе не требуется")
     assert contact_options("Пишите @client12345")["status"] == "direct_free"
     assert contact_options("Отклик: jobs@example.com")["method"] == "Email"
     assert contact_options("Нужен бот", [{"label": "Написать", "url": "https://t.me/client12345"}])["status"] == "direct_free"
