@@ -6,7 +6,8 @@ import pytest
 from telethon.errors import FloodWaitError
 
 from scout.bot import create_router, job_keyboard
-from scout.service import DISCOVERY_QUERIES, ScoutService
+from scout.service import DISCOVERY_GROUPS, ScoutService
+from scout.telegram import chat_search_term
 
 
 def test_audited_sources_pause_only_confirmed_intermediaries(repo):
@@ -180,7 +181,7 @@ async def test_generic_remote_job_is_not_sent(repo):
 
 
 @pytest.mark.asyncio
-async def test_ai_rejects_permanent_it_role_without_vibe_coding(repo):
+async def test_regular_it_work_does_not_require_vibe_coding(repo):
     channel = repo.candidate(100, "scoutjobs", "Jobs", "", None, 70, "", [])
     repo.transition_channel(channel.id, "approved")
 
@@ -191,11 +192,11 @@ async def test_ai_rejects_permanent_it_role_without_vibe_coding(repo):
                         "is_ongoing": True, "ai_coding_explicit": False, "reason": "найм"}
             return await super().ask(kind, text)
 
-    bot = SimpleNamespace(send_message=AsyncMock())
+    bot = SimpleNamespace(send_message=AsyncMock(return_value=SimpleNamespace(message_id=42)))
     service = ScoutService(repo, FakeSource(), StrictAI(), bot, 1)
     await service.monitor()
-    bot.send_message.assert_not_awaited()
-    assert repo.stats()["jobs"] == 0
+    bot.send_message.assert_awaited_once()
+    assert repo.stats()["jobs"] == 1
 
 
 @pytest.mark.asyncio
@@ -218,6 +219,7 @@ async def test_permanent_it_role_with_explicit_vibe_coding_is_sent(repo):
 
     bot = SimpleNamespace(send_message=AsyncMock(return_value=SimpleNamespace(message_id=42)))
     service = ScoutService(repo, VibeSource(), VibeAI(), bot, 1)
+    repo.set_setting("employment_full_time_role", "true")
     await service.monitor()
     bot.send_message.assert_awaited_once()
     await service.monitor()
@@ -225,7 +227,7 @@ async def test_permanent_it_role_with_explicit_vibe_coding_is_sent(repo):
 
 
 @pytest.mark.asyncio
-async def test_permanent_it_role_without_explicit_ai_coding_is_not_sent(repo):
+async def test_full_time_is_disabled_by_default_even_without_ai_coding(repo):
     channel = repo.candidate(100, "scoutjobs", "Jobs", "", None, 70, "", [])
     repo.transition_channel(channel.id, "approved")
 
@@ -243,11 +245,11 @@ async def test_permanent_it_role_without_explicit_ai_coding_is_not_sent(repo):
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("announcement, should_send", [
-    ("Подработка: поддерживать Python-бота по 3 часа в день, оплата ежемесячно", False),
+    ("Подработка: поддерживать Python-бота по 3 часа в день, оплата ежемесячно", True),
     ("Подработка: поддерживать Python-бота по 3 часа в день с помощью Codex, оплата ежемесячно", True),
     ("Разовая подработка: написать Python-скрипт для выгрузки данных, оплата за результат", True),
 ])
-async def test_part_time_requires_explicit_ai_coding_except_one_off(repo, announcement, should_send):
+async def test_part_time_and_one_off_without_ai_coding(repo, announcement, should_send):
     channel = repo.candidate(100, "scoutjobs", "Jobs", "", None, 70, "", [])
     repo.transition_channel(channel.id, "approved")
 
@@ -292,7 +294,8 @@ async def test_explicit_vibe_coding_part_time_is_sent_when_ai_mislabels_it_and_p
     bot = SimpleNamespace(send_message=AsyncMock(return_value=SimpleNamespace(message_id=42)))
     service = ScoutService(repo, VibeSource(), MislabelingAI(), bot, 1)
     await service.monitor()
-    bot.send_message.assert_awaited_once()
+    bot.send_message.assert_not_awaited()
+    assert repo.stats()["jobs"] == 0
 
 
 @pytest.mark.asyncio
@@ -417,7 +420,7 @@ async def test_discovery_suggests_recent_development_chats_across_queries(repo):
     status, found, errors, retry = await service.discover()
     assert (status, found, errors) == ("done", 1, 0)
     assert retry is not None
-    assert len(source.searches) == len(DISCOVERY_QUERIES)
+    assert len(source.searches) == len({chat_search_term(phrase) for phrases in DISCOVERY_GROUPS.values() for phrase in phrases})
     assert [channel.username for channel in repo.list_channels("pending")] == ["jobs00001"]
     bot.send_message.assert_awaited_once()
 
@@ -451,7 +454,7 @@ async def test_discovery_checks_all_found_chats_without_model_call_limit(repo):
 
 
 @pytest.mark.asyncio
-async def test_discovery_only_suggests_direct_contact_sources(repo):
+async def test_discovery_can_suggest_sources_with_unverified_contacts(repo):
     class DiscoverySource(FakeSource):
         async def post_search_quota(self, query):
             return SimpleNamespace(remains=0, query_is_free=True, wait_till=None)
@@ -476,13 +479,13 @@ async def test_discovery_only_suggests_direct_contact_sources(repo):
     ai = SimpleNamespace(ask=AsyncMock(return_value={"suitable": True}))
     bot = SimpleNamespace(send_message=AsyncMock(return_value=SimpleNamespace(message_id=1)))
     service = ScoutService(repo, DiscoverySource(), ai, bot, 1)
-    assert (await service.discover())[:3] == ("done", 1, 0)
+    assert (await service.discover())[:3] == ("done", 3, 0)
     candidates = repo.list_channels("pending")
-    assert {channel.username for channel in candidates} == {"jobs00003"}
+    assert {channel.username for channel in candidates} == {"jobs00001", "jobs00003", "jobs00004"}
     assert repo.get_candidate(next(c.id for c in candidates if c.username == "jobs00003")).usefulness == 80
     digest = bot.send_message.await_args.args[1]
     assert "Прямые заказы" in digest
-    assert "Обычные заказы" not in digest
+    assert "Обычные заказы" in digest
 
 
 @pytest.mark.asyncio
@@ -496,11 +499,11 @@ async def test_monitor_does_not_notify_kwork_post(repo):
                                   date=datetime.now(timezone.utc), media=None, fwd_from=None)
 
     bot = SimpleNamespace(send_message=AsyncMock())
-    ai = SimpleNamespace(ask=AsyncMock())
+    ai = FakeAI()
     service = ScoutService(repo, KworkSource(), ai, bot, 1)
     await service.monitor()
-    assert repo.stats()["jobs"] == 0
-    ai.ask.assert_not_awaited()
+    assert repo.stats()["jobs"] == 1
+    assert repo.jobs()[0].contact_status == "none"
     bot.send_message.assert_not_awaited()
 
 
@@ -526,7 +529,7 @@ async def test_platform_posts_and_sources_resume_from_menu_setting(repo):
     await service.monitor()
     assert source.calls == 1
     assert repo.stats()["jobs"] == 1
-    bot.send_message.assert_awaited_once()
+    bot.send_message.assert_not_awaited()
 
 
 @pytest.mark.asyncio
@@ -546,12 +549,12 @@ async def test_mixed_channel_sends_direct_contact_but_skips_fl(repo):
     bot = SimpleNamespace(send_message=AsyncMock(return_value=SimpleNamespace(message_id=42)))
     service = ScoutService(repo, MixedSource(), FakeAI(), bot, 1)
     await service.monitor()
-    assert repo.stats()["jobs"] == 1
+    assert repo.stats()["jobs"] == 2
     bot.send_message.assert_awaited_once()
 
 
 @pytest.mark.asyncio
-async def test_external_and_unknown_posts_are_skipped_before_ai(repo):
+async def test_external_and_unknown_posts_are_assessed_but_not_notified(repo):
     channel = repo.candidate(100, "scoutjobs", "IT заказы", "", None, 70, "", [])
     repo.transition_channel(channel.id, "approved")
 
@@ -564,12 +567,11 @@ async def test_external_and_unknown_posts_are_skipped_before_ai(repo):
                 yield SimpleNamespace(id=number, raw_text=text, date=datetime.now(timezone.utc),
                                       media=None, fwd_from=None)
 
-    ai = SimpleNamespace(ask=AsyncMock())
+    ai = FakeAI()
     bot = SimpleNamespace(send_message=AsyncMock())
     service = ScoutService(repo, ExternalSource(), ai, bot, 1)
     await service.monitor()
-    assert repo.stats()["jobs"] == 0
-    ai.ask.assert_not_awaited()
+    assert repo.stats()["jobs"] == 2
     bot.send_message.assert_not_awaited()
 
 

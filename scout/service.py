@@ -7,12 +7,14 @@ from datetime import datetime, timedelta, timezone
 from zoneinfo import ZoneInfo
 
 from aiogram import Bot
-from telethon.errors import FloodWaitError
+from telethon import types
+from telethon.errors import FloodWaitError, RPCError
 
-from .core import (explicit_ai_coding, explicit_it_task, has_direct_contact, has_direct_contact_link, likely_job,
-                   mentions_platform, ongoing_role, potential_job, similar)
+from .core import (contact_options, employment_type, explicit_it_task,
+                   likely_job, mentions_platform, potential_job, similar)
 from .models import Channel
 from .repository import Repository
+from .telegram import chat_search_term
 
 log = logging.getLogger(__name__)
 
@@ -21,7 +23,16 @@ JOB_STATUS_LABELS = {
     "irrelevant": "❌ Не подходит",
     "applied": "📨 Откликнулся",
     "won": "🏆 Получил заказ",
+    "replied": "💬 Заказчик ответил",
+    "negotiating": "🤝 Обсуждаем условия",
+    "rejected": "🚫 Отказ",
+    "no_reply": "⌛ Не ответили",
 }
+
+EMPLOYMENT_LABELS = {"one_time_project": "Разовый заказ", "recurring_project": "Регулярный проект",
+                     "part_time_role": "Частичная занятость", "full_time_role": "Полная занятость"}
+CONTACT_LABELS = {"direct_free": "Бесплатный", "platform_free": "Бесплатный",
+                  "paid": "Платный", "unknown": "Не подтверждено", "none": "Не подтверждено"}
 
 DISCOVERY_QUERIES = (
     "нужен разработчик", "нужно разработать", "ищу программиста", "заказ на разработку",
@@ -31,6 +42,15 @@ DISCOVERY_QUERIES = (
     "заказ на crm", "доработать сайт", "нужен программист", "заказ на бота",
     "заказы разработка", "заказы программистам", "фриланс разработка",
 )
+DISCOVERY_GROUPS = {
+    "development": DISCOVERY_QUERIES + ("доработать сайт", "ищем разработчика на проект"),
+    "telegram_automation": ("telegram бот разработчик", "интеграция с crm", "автоматизировать заявки",
+                            "подключить api", "автоматизация таблиц"),
+    "project_work": ("разработчик частичная занятость", "нужен подрядчик разработка",
+                     "регулярные задачи python", "технический специалист проект"),
+    "english": ("looking for developer", "need python developer", "freelance automation",
+                "telegram bot developer", "part time developer", "api integration project"),
+}
 DEVELOPMENT_TASK = re.compile(
     r"\b(?:разработ|программ|сайт|лендинг|верстк|бот\b|автоматизац|интеграц|парсинг|"
     r"скрипт|приложен|crm\b|api\b|python\b|frontend\b|backend\b|wordpress\b|tilda\b)",
@@ -50,9 +70,15 @@ def job_text(job, analysis, link: str | None) -> str:
     status = JOB_STATUS_LABELS.get(job.status)
     return (f"{status + ' · ' if status else ''}Заказ #{job.id}: {result['title']}\n"
             f"Рейтинг: {job.score}/100 · {result['category']}\n"
+            f"Занятость: {EMPLOYMENT_LABELS.get(job.employment_type, job.employment_type)}\n"
+            f"Способ связи: {job.contact_method}\n"
+            f"Отклик: {CONTACT_LABELS.get(job.contact_status, 'Не подтверждено')}\n"
+            f"{('Контакт: ' + job.contact_url + chr(10)) if job.contact_url and job.contact_status in {'direct_free', 'platform_free'} else ''}"
             f"Бюджет: {result['budget'] or 'не указан'} {result['currency'] or ''}\n"
             f"Требования: {requirements}\n"
-            f"Почему: {result['score_reason'][:500]}\n"
+            f"Почему подходит: {result['score_reason'][:500]}\n"
+            f"{('Моя сумма: ' + job.amount + chr(10)) if job.amount else ''}"
+            f"{('Заметка: ' + job.note[:500] + chr(10)) if job.note else ''}"
             f"Источник: {link or 'ссылка недоступна'}")
 
 
@@ -64,6 +90,7 @@ class ScoutService:
         self.last_monitor_started: datetime | None = None
         self.last_monitor_finished: datetime | None = None
         self.last_monitor_errors: list[str] = []
+        self.repo.seed_search_queries(DISCOVERY_GROUPS)
 
     def platforms_enabled(self) -> bool:
         return self.repo.setting("platform_sources_enabled", "false") == "true"
@@ -93,9 +120,11 @@ class ScoutService:
         username = parse_public_channel(raw)
         entity = await self.source.resolve(username)
         try:
-            examples, active, ad_ratio = await self.source.inspect(entity)
+            inspection = await self.source.inspect(entity)
+            examples, active, ad_ratio = inspection
         except Exception:
             log.exception("История канала %s недоступна; ручное добавление продолжено", username)
+            inspection = None
             examples, active, ad_ratio = [], False, 0.0
         verified = []
         for example in examples:
@@ -106,12 +135,16 @@ class ScoutService:
                 break
             if assessment["suitable"]:
                 verified.append(example)
-        usefulness = max(0, min(100, len(verified) * 30 + (10 if active else 0) - (30 if ad_ratio > .5 else 0)))
+        usefulness = max(0, min(100, len(verified) * 25 + (10 if active else 0)
+                                 + round(20 * getattr(inspection, "contact_ratio", 0))
+                                 - round(30 * ad_ratio) - round(20 * getattr(inspection, "repeat_ratio", 0))))
         reason = f"OpenRouter подтвердил {len(verified)} из {len(examples)} проверенных примеров; решение за вами"
         if not active:
             reason += "; канал неактивен более 30 дней"
         if ad_ratio > .5:
             reason += "; много рекламы"
+        if getattr(inspection, "repeat_ratio", 0) > .5:
+            reason += "; много повторов"
         if verified:
             examples = verified
         description = await self.source.description(entity)
@@ -176,6 +209,7 @@ class ScoutService:
                     seen_examples.append(candidate.examples[0])
             suggested = 0
             errors = 0
+            seen_chat_terms: set[str] = set()
 
             async def flush_batch(all_items: bool = False) -> None:
                 nonlocal errors
@@ -197,44 +231,80 @@ class ScoutService:
             retry = self.repo.setting("discovery_retry_at")
             if retry and datetime.fromisoformat(retry) > now:
                 return await finish("wait", datetime.fromisoformat(retry))
-            start = int(self.repo.setting("discovery_query_index", "0"))
-            for offset in range(len(DISCOVERY_QUERIES)):
-                index = (start + offset) % len(DISCOVERY_QUERIES)
-                query = DISCOVERY_QUERIES[index]
+            enabled_groups = {group for group in DISCOVERY_GROUPS
+                              if self.repo.setting("search_group_" + group, "true") == "true"}
+            query_rows = self.repo.search_queries(enabled_groups)
+            # A fifth of each batch explores less tried phrases. All enabled queries remain eligible.
+            ranked = sorted(query_rows, key=lambda row: (row.new_sources + row.suitable_jobs * 2 + row.applications * 3 + row.replies * 4) / (row.searches + 1), reverse=True)
+            explored = sorted(query_rows, key=lambda row: row.searches)
+            order = []
+            for position in range(len(query_rows)):
+                pool = explored if position % 5 == 4 else ranked
+                row = next((item for item in pool if item.phrase not in order), None)
+                if row:
+                    order.append(row.phrase)
+            start = int(self.repo.setting("discovery_query_index", "0")) % len(order) if order else 0
+            for offset in range(len(order)):
+                index = (start + offset) % len(order)
+                query = order[index]
                 try:
-                    quota = await self.source.post_search_quota(query)
-                    if not quota.remains and not quota.query_is_free:
+                    search_error = None
+                    try:
+                        quota = await self.source.post_search_quota(query)
+                    except FloodWaitError:
+                        raise
+                    except RPCError as exc:
+                        quota = None
+                        search_error = type(exc).__name__
+                    if quota and not quota.remains and not quota.query_is_free:
                         wait_until = (datetime.fromtimestamp(quota.wait_till, timezone.utc) if quota.wait_till
                                       else datetime.now(timezone.utc) + timedelta(hours=1))
                         self.repo.set_setting("discovery_retry_at", wait_until.isoformat())
                         log.info("Бесплатный поиск Telegram исчерпан; повтор после %s", wait_until.isoformat())
                         return await finish("wait", wait_until)
-                    found = await self.source.search_public_posts(query)
+                    found = []
+                    if quota:
+                        try:
+                            found = await self.source.search_public_posts(query)
+                        except FloodWaitError:
+                            raise
+                        except RPCError as exc:
+                            # Public chat discovery is a separate API route.
+                            search_error = type(exc).__name__
+                            log.info("Поиск постов недоступен для %s: %s", query, type(exc).__name__)
+                    chat_term = chat_search_term(query)
                     try:
-                        chats = await self.source.search_public_chats(query, limit=30)
+                        chats = [] if chat_term in seen_chat_terms else await self.source.search_public_chats(chat_term, limit=30)
+                        seen_chat_terms.add(chat_term)
                     except FloodWaitError:
                         raise
-                    except Exception:
+                    except Exception as exc:
                         errors += 1
+                        search_error = type(exc).__name__
                         log.exception("Поиск публичных чатов по запросу %s не удался", query)
                         chats = []
-                    self.repo.set_setting("discovery_query_index", str((index + 1) % len(DISCOVERY_QUERIES)))
+                    self.repo.set_setting("discovery_query_index", str((index + 1) % len(order)))
+                    self.repo.record_search(query, searches=1, success=True, error=search_error)
                 except FloodWaitError as exc:
                     wait_until = datetime.now(timezone.utc) + timedelta(seconds=max(exc.seconds, 60))
                     self.repo.set_setting("discovery_retry_at", wait_until.isoformat())
+                    self.repo.record_search(query, error=f"FloodWait {exc.seconds}s")
                     log.warning("Telegram ограничил поиск на %s секунд", exc.seconds)
                     return await finish("wait", wait_until)
                 except (ConnectionError, OSError):
                     errors += 1
+                    self.repo.record_search(query, error="Telegram connection error")
                     log.exception("Соединение с Telegram потеряно во время поиска")
                     return await finish("error", None)
                 except Exception:
                     errors += 1
+                    self.repo.record_search(query, error="Telegram search error")
                     log.exception("Поиск публикаций по запросу %s не удался", query)
                     continue
                 for entity, post in [*found, *((chat, None) for chat in chats)]:
                     content = (post.raw_text or "") if post else ""
                     if entity.id in known:
+                        self.repo.record_search(query, duplicates=1)
                         continue
                     if not self.platforms_enabled() and mentions_platform(entity.title or ""):
                         continue
@@ -242,19 +312,21 @@ class ScoutService:
                                  or not likely_job(content) or not DEVELOPMENT_TASK.search(content)):
                         continue
                     if post and any(similar(content, prior) for prior in seen_examples):
+                        self.repo.record_search(query, duplicates=1)
                         continue
                     known.add(entity.id)
                     try:
-                        examples, active, ad_ratio = await self.source.inspect(entity, max_age_days=3)
+                        inspection = await self.source.inspect(entity, max_age_days=3)
+                        examples, active, ad_ratio = inspection
                         if not active or ad_ratio > .5:
                             continue
                         description = await self.source.description(entity)
                         if not self.platforms_enabled() and mentions_platform(description or ""):
                             continue
                         examples = [text for text in dict.fromkeys([content, *examples])
-                                    if likely_job(text) and DEVELOPMENT_TASK.search(text)
-                                    and (self.platforms_enabled() or has_direct_contact(text, entity.username))]
+                                    if likely_job(text) and DEVELOPMENT_TASK.search(text)]
                         if examples and any(similar(examples[0], prior) for prior in seen_examples):
+                            self.repo.record_search(query, duplicates=1)
                             continue
                         verified = []
                         for example in examples[:3]:
@@ -263,14 +335,20 @@ class ScoutService:
                                 break
                         if not verified:
                             continue
-                        direct = has_direct_contact(verified[0], entity.username)
+                        direct = contact_options(verified[0], source_username=entity.username)["status"] == "direct_free"
+                        usefulness = max(0, min(100, 50 + (30 if direct else 0)
+                                                 + round(20 * getattr(inspection, "contact_ratio", 0))
+                                                 - round(30 * ad_ratio)
+                                                 - round(20 * getattr(inspection, "repeat_ratio", 0))))
                         channel = self.repo.candidate(
                             entity.id, entity.username, entity.title, description, query,
-                            80 if direct else 50,
+                            usefulness,
                             (f"Недавние IT-заказы: {len(verified)}; чат активен за последние 3 дня; "
-                             + ("есть прямой контакт заказчика" if direct else "прямой контакт не указан")), verified,
+                             + ("есть прямой контакт заказчика" if direct else "прямой контакт не указан")
+                             + (f"; повторы {getattr(inspection, 'repeat_ratio', 0):.0%}, реклама {ad_ratio:.0%}")), verified,
                         )
                         if channel:
+                            self.repo.record_search(query, new_sources=1)
                             batch.append(channel)
                             seen_examples.append(verified[0])
                             suggested += 1
@@ -314,9 +392,14 @@ class ScoutService:
     def _save_item(self, channel: Channel, item, advance_cursor: bool = True) -> None:
         from .telegram import outbound_links
         link = f"https://t.me/{channel.username}/{item.id}" if channel.username else None
+        links = outbound_links(item)
+        sender = getattr(item, "sender", None)
+        author = sender.username if isinstance(sender, types.User) else None
+        contact = contact_options(item.raw_text or "", links, channel.username, author)
         self.repo.save_message(channel.id, item.id, item.raw_text or "", link, item.date,
                                {"has_media": bool(item.media), "forwarded": bool(item.fwd_from),
-                                "outbound_links": outbound_links(item)}, advance_cursor=advance_cursor)
+                                "outbound_links": links, "contact_url": contact.get("url"),
+                                "author_username": author}, advance_cursor=advance_cursor)
 
     async def backfill_today(self) -> tuple[int, int, int, list[str]]:
         async with self.monitor_lock:
@@ -349,26 +432,30 @@ class ScoutService:
         for message in self.repo.pending_messages(limit=limit):
             try:
                 channel = self.repo.get_channel(message.channel_id)
-                ongoing = ongoing_role(message.text)
-                ai_coding = explicit_ai_coding(message.text)
-                if ((not self.platforms_enabled() and not has_direct_contact_link(
-                        message.text, message.metadata_json.get("outbound_links"), channel.username if channel else None))
-                        or self.source_paused(channel)
-                        or not potential_job(message.text)
-                        or not (explicit_it_task(message.text) or (ongoing and ai_coding))
-                        or (ongoing and not ai_coding)
-                        or self.repo.previously_irrelevant(message)):
-                    self.repo.mark_message(message.id, "irrelevant")
+                employment = employment_type(message.text)
+                contact = contact_options(message.text, (message.metadata_json or {}).get("outbound_links"),
+                                          channel.username if channel else None,
+                                          (message.metadata_json or {}).get("author_username"))
+                reason = ("source_paused" if self.source_paused(channel) else
+                          "not_job" if not potential_job(message.text) else
+                          "no_it_signal" if not explicit_it_task(message.text) else
+                          "category_disabled" if self.repo.setting("employment_" + employment,
+                              "false" if employment == "full_time_role" else "true") != "true" else None)
+                if reason:
+                    self.repo.mark_message(message.id, "irrelevant", reason)
                     continue
                 existing = self.repo.matching_job(message)
                 if existing and self.repo.analysis(existing.id):
                     self.repo.attach_job(message)
+                    if existing.contact_status not in {"direct_free", "platform_free"} and contact["status"] in {"direct_free", "platform_free"}:
+                        self.repo.set_job_details(existing.id, employment, contact)
+                        await self.notify_job(existing.id, "instant")
                     self.repo.mark_message(message.id, "linked")
                     continue
                 pre = await self.ai.ask("prefilter", message.text)
-                if (not (pre["is_job"] and pre["codex_feasible"] and (pre["is_it"] or (ongoing and ai_coding)))
-                        or ((ongoing or pre["is_ongoing"]) and not ai_coding)):
-                    self.repo.mark_message(message.id, "irrelevant")
+                if not (pre["is_job"] and pre["codex_feasible"] and pre["is_it"]):
+                    reason = "ai_not_job" if not pre["is_job"] else "ai_not_feasible" if not pre["codex_feasible"] else "ai_not_it"
+                    self.repo.mark_message(message.id, "irrelevant", reason)
                     continue
                 job, created = self.repo.attach_job(message)
                 if not created and self.repo.analysis(job.id):
@@ -376,6 +463,10 @@ class ScoutService:
                     continue
                 deep = await self.ai.ask("deep", message.text)
                 self.repo.save_analysis(job.id, "deep", self.ai.model, deep)
+                self.repo.set_job_details(job.id, employment, contact)
+                candidate = self.repo.get_candidate(message.channel_id)
+                if candidate and candidate.query:
+                    self.repo.record_search(candidate.query, suitable_jobs=1)
                 self.repo.mark_message(message.id, "linked")
                 await self.notify_job(job.id, "instant")
             except Exception as exc:
@@ -393,13 +484,12 @@ class ScoutService:
         from .bot import job_keyboard
         message = self.repo.job_message(job_id)
         channel = self.repo.job_channel(job_id)
-        if (not self.platforms_enabled() and (not message or not has_direct_contact_link(
-                message.text, message.metadata_json.get("outbound_links"), channel.username if channel else None))) or self.source_paused(channel):
+        job = self.repo.job(job_id)
+        if not job or job.contact_status not in {"direct_free", "platform_free"} or self.source_paused(channel):
             return
         if not self.repo.claim_notification(job_id, kind):
             return
         try:
-            job = self.repo.job(job_id)
             analysis = self.repo.analysis(job_id)
             sent = await self.bot.send_message(self.owner_id, job_text(job, analysis, self.repo.job_link(job_id))[:4000],
                                                reply_markup=job_keyboard(job_id, self.repo.job_link(job_id)))

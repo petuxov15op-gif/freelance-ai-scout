@@ -1,15 +1,16 @@
 from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
+import hashlib
 
-from sqlalchemy import func, select
+from sqlalchemy import case, func, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import sessionmaker
 
 from .core import normalize_link, similar, text_hash
 from .db import transaction
 from .models import (AIUsage, Analysis, Channel, ChannelCandidate, Feedback, Job,
-                     JobSource, Message, MonitoringState, Notification, Setting, utcnow)
+                     JobSource, Message, MonitoringState, Notification, SearchQuery, Setting, utcnow)
 
 
 class Repository:
@@ -123,9 +124,11 @@ class Repository:
                 state.checked_at = utcnow()
             return message
 
-    def mark_message(self, message_id: int, status: str) -> None:
+    def mark_message(self, message_id: int, status: str, reason: str | None = None) -> None:
         with transaction(self.factory) as db:
-            db.get(Message, message_id).status = status
+            message = db.get(Message, message_id)
+            message.status = status
+            message.rejection_reason = reason
 
     def pending_messages(self, limit: int | None = 500) -> list[Message]:
         with self.factory() as db:
@@ -145,7 +148,9 @@ class Repository:
             match = self._match_job(db, message)
             created = match is None
             if created:
-                match = Job(canonical_hash=message.text_hash)
+                identity = (message.metadata_json or {}).get("contact_url") or f"channel:{message.channel_id}"
+                canonical_hash = hashlib.sha256((message.text_hash + "|" + identity).encode()).hexdigest()
+                match = Job(canonical_hash=canonical_hash)
                 db.add(match)
                 db.flush()
             db.add(JobSource(job_id=match.id, message_id=message.id))
@@ -162,13 +167,32 @@ class Repository:
                 Message.normalized_link == message.normalized_link).limit(1))
             if match:
                 return match
-        match = db.scalar(select(Job).where(Job.canonical_hash == message.text_hash))
-        if match:
-            return match
+        exact = db.execute(select(Job, Message).join(JobSource, JobSource.job_id == Job.id)
+                           .join(Message, Message.id == JobSource.message_id)
+                           .where(Message.text_hash == message.text_hash).limit(200)).all()
+        for job, other in exact:
+            old_contact = (other.metadata_json or {}).get("contact_url")
+            new_contact = (message.metadata_json or {}).get("contact_url")
+            if (old_contact and old_contact == new_contact) or (not old_contact and not new_contact and other.channel_id == message.channel_id):
+                return job
         recent = db.execute(select(Job, Message).join(JobSource, JobSource.job_id == Job.id)
                             .join(Message, Message.id == JobSource.message_id)
                             .order_by(Job.id.desc()).limit(200)).all()
-        return next((job for job, other in recent if similar(message.text, other.text)), None)
+        # Similarity alone merges independent customers using the same template.
+        # Require a shared, confirmed contact when links differ.
+        contact = (message.metadata_json or {}).get("contact_url")
+        if not contact:
+            return None
+        return next((job for job, other in recent if (other.metadata_json or {}).get("contact_url") == contact
+                     and similar(message.text, other.text)), None)
+
+    def set_job_details(self, job_id: int, employment: str, contact: dict) -> None:
+        with transaction(self.factory) as db:
+            job = db.get(Job, job_id)
+            job.employment_type = employment
+            job.contact_status = contact["status"]
+            job.contact_method = contact["method"]
+            job.contact_url = contact.get("url")
 
     def save_analysis(self, job_id: int, kind: str, model: str, result: dict) -> None:
         with transaction(self.factory) as db:
@@ -247,7 +271,115 @@ class Repository:
     def add_feedback(self, job_id: int, action: str) -> None:
         with transaction(self.factory) as db:
             db.add(Feedback(job_id=job_id, action=action))
-            db.get(Job, job_id).status = action
+            job = db.get(Job, job_id)
+            job.status = action
+            first_application = action == "applied" and job.applied_at is None
+            first_reply = action == "replied" and job.replied_at is None
+            if first_application:
+                job.applied_at = utcnow()
+            if first_reply:
+                job.replied_at = utcnow()
+            candidate = db.scalar(select(ChannelCandidate).join(Channel, Channel.id == ChannelCandidate.channel_id)
+                                  .join(Message, Message.channel_id == Channel.id)
+                                  .join(JobSource, JobSource.message_id == Message.id)
+                                  .where(JobSource.job_id == job_id, ChannelCandidate.query.is_not(None)).limit(1))
+            if candidate and (first_application or first_reply):
+                query = db.scalar(select(SearchQuery).where(SearchQuery.phrase == candidate.query))
+                if query:
+                    field = "applications" if first_application else "replies"
+                    setattr(query, field, getattr(query, field) + 1)
+
+    def set_job_note(self, job_id: int, note: str) -> bool:
+        with transaction(self.factory) as db:
+            job = db.get(Job, job_id)
+            if not job:
+                return False
+            job.note = note[:1000] or None
+            return True
+
+    def set_job_amount(self, job_id: int, amount: str) -> bool:
+        with transaction(self.factory) as db:
+            job = db.get(Job, job_id)
+            if not job:
+                return False
+            job.amount = amount[:100] or None
+            return True
+
+    def search_queries(self, groups: set[str] | None = None) -> list[SearchQuery]:
+        with self.factory() as db:
+            query = select(SearchQuery).where(SearchQuery.enabled.is_(True))
+            if groups is not None:
+                query = query.where(SearchQuery.group.in_(groups))
+            return list(db.scalars(query.order_by(SearchQuery.id)))
+
+    def seed_search_queries(self, grouped: dict[str, tuple[str, ...]]) -> None:
+        with transaction(self.factory) as db:
+            existing = set(db.scalars(select(SearchQuery.phrase)))
+            for group, phrases in grouped.items():
+                for phrase in phrases:
+                    if phrase not in existing:
+                        db.add(SearchQuery(phrase=phrase, group=group))
+                        existing.add(phrase)
+
+    def record_search(self, phrase: str, **counts: int | str | None) -> None:
+        with transaction(self.factory) as db:
+            row = db.scalar(select(SearchQuery).where(SearchQuery.phrase == phrase))
+            if not row:
+                return
+            for field in ("searches", "new_sources", "suitable_jobs", "duplicates"):
+                setattr(row, field, getattr(row, field) + int(counts.get(field, 0) or 0))
+            if counts.get("success"):
+                row.last_success_at = utcnow()
+                row.last_error = None
+            if counts.get("error"):
+                row.last_error = str(counts["error"])[:300]
+
+    def analytics(self, days: int | None) -> dict:
+        since = utcnow() - timedelta(days=days) if days else None
+        with self.factory() as db:
+            messages = select(func.count()).select_from(Message)
+            jobs = select(func.count()).select_from(Job)
+            unique = select(func.count()).select_from(Job).where(Job.score.is_not(None), Job.contact_status.in_(("direct_free", "platform_free")))
+            if since:
+                messages = messages.where(Message.discovered_at >= since)
+                jobs = jobs.where(Job.created_at >= since)
+                unique = unique.where(Job.created_at >= since)
+            def action_ids(action):
+                query = select(Feedback.job_id).where(Feedback.action == action)
+                return query.where(Feedback.created_at >= since) if since else query
+            def count_ids(query):
+                return db.scalar(select(func.count(func.distinct(Job.id))).where(Job.id.in_(query))) or 0
+            applied_ids = action_ids("applied")
+            replied_ids = action_ids("replied")
+            won_ids = action_ids("won")
+            return {"found": db.scalar(messages) or 0, "jobs": db.scalar(jobs) or 0,
+                    "unique": db.scalar(unique) or 0, "applied": count_ids(applied_ids),
+                    "replied": count_ids(replied_ids), "won": count_ids(won_ids),
+                    "replied_from_applied": db.scalar(select(func.count(func.distinct(Job.id))).where(
+                        Job.id.in_(applied_ids), Job.id.in_(replied_ids))) or 0,
+                    "won_from_applied": db.scalar(select(func.count(func.distinct(Job.id))).where(
+                        Job.id.in_(applied_ids), Job.id.in_(won_ids))) or 0}
+
+    def top_channels(self, limit: int = 5) -> list[tuple[str, int, int, int, int]]:
+        with self.factory() as db:
+            unique = func.count(func.distinct(JobSource.job_id))
+            applied = func.count(func.distinct(case((Feedback.action == "applied", Job.id))))
+            replied = func.count(func.distinct(case((Feedback.action == "replied", Job.id))))
+            won = func.count(func.distinct(case((Feedback.action == "won", Job.id))))
+            return [(name or "?", count, apps, replies, wins) for name, count, apps, replies, wins in db.execute(
+                select(Channel.username, unique, applied, replied, won)
+                .join(Message, Message.channel_id == Channel.id)
+                .join(JobSource, JobSource.message_id == Message.id)
+                .join(Job, Job.id == JobSource.job_id)
+                .outerjoin(Feedback, Feedback.job_id == Job.id)
+                .where(Job.contact_status.in_(("direct_free", "platform_free")))
+                .group_by(Channel.id).order_by((won * 10 + replied * 4 + applied * 2 + unique).desc()).limit(limit))]
+
+    def rejection_counts(self, limit: int = 5) -> list[tuple[str, int]]:
+        with self.factory() as db:
+            return [(reason, count) for reason, count in db.execute(
+                select(Message.rejection_reason, func.count()).where(Message.rejection_reason.is_not(None))
+                .group_by(Message.rejection_reason).order_by(func.count().desc()).limit(limit))]
 
     def record_usage(self, model: str, purpose: str, usage: dict) -> None:
         with transaction(self.factory) as db:

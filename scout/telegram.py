@@ -3,15 +3,31 @@ from __future__ import annotations
 import asyncio
 import logging
 import re
+from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 
 from telethon import TelegramClient, functions, types
 from telethon.errors import FloodWaitError, RPCError
 
-from .core import likely_job, similar
+from .core import contact_options, likely_job, similar
 
 log = logging.getLogger(__name__)
 USERNAME = re.compile(r"^(?:https?://t\.me/|@)?([A-Za-z][A-Za-z0-9_]{4,31})/?$")
+
+
+@dataclass
+class Inspection:
+    examples: list[str]
+    active: bool
+    ad_ratio: float
+    repeat_ratio: float
+    contact_ratio: float
+
+    def __iter__(self):
+        # Preserve the existing three-value caller contract.
+        yield self.examples
+        yield self.active
+        yield self.ad_ratio
 
 
 def parse_public_channel(value: str) -> str:
@@ -19,6 +35,17 @@ def parse_public_channel(value: str) -> str:
     if not match:
         raise ValueError("Укажите публичный канал: @username или https://t.me/username")
     return match.group(1)
+
+
+def chat_search_term(query: str) -> str:
+    """contacts.search matches substrings, not full-text job descriptions."""
+    lower = query.lower()
+    for term in ("python", "разработ", "программ", "автоматизац", "интеграц", "telegram",
+                 "developer", "freelance", "frontend", "backend", "приложен", "сайт", "скрипт",
+                 "бот", "crm", "api", "ваканс", "подрядчик"):
+        if term in lower:
+            return term
+    return query
 
 
 class TelegramSource:
@@ -83,12 +110,15 @@ class TelegramSource:
         examples, _, _ = await self.inspect(entity, limit)
         return examples
 
-    async def inspect(self, entity, limit: int = 20, max_age_days: int = 30) -> tuple[list[str], bool, float]:
+    async def inspect(self, entity, limit: int = 20, max_age_days: int = 30) -> Inspection:
         await self.ensure_connected()
         result = []
         latest = None
         advertising = 0
         total = 0
+        repeats = 0
+        jobs = 0
+        reachable = 0
         cutoff = datetime.now(timezone.utc) - timedelta(days=max_age_days)
         async for message in self.client.iter_messages(entity, limit=limit):
             if latest is None:
@@ -99,10 +129,17 @@ class TelegramSource:
             content = (message.raw_text or "").lower()
             if any(token in content for token in ("реклама", "рекламный пост", "подписывайтесь", "advertisement", "sponsored")):
                 advertising += 1
-            if message.raw_text and likely_job(message.raw_text) and not any(similar(message.raw_text, prior) for prior in result):
-                result.append(message.raw_text[:800])
+            if message.raw_text and likely_job(message.raw_text):
+                jobs += 1
+                if any(similar(message.raw_text, prior) for prior in result):
+                    repeats += 1
+                else:
+                    result.append(message.raw_text[:800])
+                if contact_options(message.raw_text, outbound_links(message), getattr(entity, "username", None))["status"] in {"direct_free", "platform_free"}:
+                    reachable += 1
         active = bool(latest and latest >= cutoff)
-        return result[:3], active, advertising / total if total else 0.0
+        return Inspection(result[:3], active, advertising / total if total else 0.0,
+                          repeats / jobs if jobs else 0.0, reachable / jobs if jobs else 0.0)
 
     async def description(self, entity) -> str | None:
         await self.ensure_connected()

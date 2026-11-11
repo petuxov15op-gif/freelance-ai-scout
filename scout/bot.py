@@ -9,15 +9,15 @@ from aiogram.filters import Command
 from aiogram.types import (BotCommand, CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup,
                            KeyboardButton, Message, ReplyKeyboardMarkup)
 
-from .service import JOB_STATUS_LABELS, job_text
+from .service import CONTACT_LABELS, DISCOVERY_GROUPS, EMPLOYMENT_LABELS, JOB_STATUS_LABELS, job_text
 from .telegram import parse_public_channel
 
 log = logging.getLogger(__name__)
 
 MENU_SECTIONS = {
     "📋 Заказы": ("latest", "top"),
-    "📡 Каналы": ("sources", "pending", "discover", "platforms"),
-    "📊 Бот": ("status", "check", "today", "stats", "settings"),
+    "📡 Каналы": ("sources", "pending", "discover", "insights", "platforms"),
+    "📊 Бот": ("status", "check", "today", "stats", "analytics", "settings"),
 }
 MENU_LABELS = {
     "latest": "📋 Последние",
@@ -26,10 +26,12 @@ MENU_LABELS = {
     "pending": "🕓 Кандидаты",
     "discover": "🔎 Найти чаты сейчас",
     "platforms": "🏪 Площадки",
+    "insights": "📡 Эффективность поиска",
     "status": "📊 Статус",
     "check": "🩺 Проверить",
     "today": "🔄 Проверить сегодня",
     "stats": "📈 Статистика",
+    "analytics": "📊 Отклики",
     "settings": "⚙️ Настройки",
 }
 ADD_CHANNEL_LABEL = "➕ Добавить канал"
@@ -48,6 +50,8 @@ MENU_ACTIONS = {
     "🩺 Проверить": "check",
     "🔄 Проверить сегодня": "today",
     "📈 Статистика": "stats",
+    "📊 Отклики": "analytics",
+    "📡 Эффективность поиска": "insights",
     "⚙️ Настройки": "settings",
 }
 
@@ -78,6 +82,7 @@ def bot_commands() -> list[BotCommand]:
         ("pending", "Каналы на подтверждении"), ("add", "Добавить канал"),
         ("latest", "Последние заказы"), ("top", "Лучшие заказы"),
         ("stats", "Статистика"), ("settings", "Настройки"),
+        ("analytics", "Аналитика откликов"),
     )]
 
 
@@ -123,10 +128,16 @@ def job_keyboard(job_id: int, link: str | None, status: str = "new", editing: bo
             [InlineKeyboardButton(text="Интересно", callback_data=f"feedback:interesting:{job_id}"),
              InlineKeyboardButton(text="Не подходит", callback_data=f"feedback:irrelevant:{job_id}")],
             [InlineKeyboardButton(text="Откликнулся", callback_data=f"feedback:applied:{job_id}"),
+             InlineKeyboardButton(text="Заказчик ответил", callback_data=f"feedback:replied:{job_id}")],
+            [InlineKeyboardButton(text="Обсуждаем", callback_data=f"feedback:negotiating:{job_id}"),
              InlineKeyboardButton(text="Получил заказ", callback_data=f"feedback:won:{job_id}")],
+            [InlineKeyboardButton(text="Отказ", callback_data=f"feedback:rejected:{job_id}"),
+             InlineKeyboardButton(text="Не ответили", callback_data=f"feedback:no_reply:{job_id}")],
         ])
         if status != "new":
             rows.append([InlineKeyboardButton(text="Снять отметку", callback_data=f"feedback:new:{job_id}")])
+    rows.append([InlineKeyboardButton(text="Заметка", callback_data=f"field:note:{job_id}"),
+                 InlineKeyboardButton(text="Сумма", callback_data=f"field:amount:{job_id}")])
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
@@ -208,8 +219,40 @@ def create_router(service) -> Router:
     router.message.middleware(OwnerMiddleware(service.owner_id))
     router.callback_query.middleware(OwnerMiddleware(service.owner_id))
     repo = service.repo
+    pending_input: dict[int, tuple[str, int]] = {}
     def settings_text() -> str:
-        return "Уведомления: все подходящие IT-варианты сразу, без порога рейтинга"
+        return "Уведомления: подходящие IT-варианты с подтверждённым бесплатным откликом. Выбери категории и группы поиска:"
+
+    def settings_keyboard() -> InlineKeyboardMarkup:
+        rows = []
+        for key, label in EMPLOYMENT_LABELS.items():
+            enabled = repo.setting("employment_" + key, "false" if key == "full_time_role" else "true") == "true"
+            rows.append([InlineKeyboardButton(text=("✅ " if enabled else "⬜ ") + label,
+                                              callback_data=f"toggle:employment:{key}")])
+        for key, label in (("development", "Разработка"), ("telegram_automation", "Telegram и автоматизация"),
+                           ("project_work", "Проектная работа"), ("english", "English")):
+            enabled = repo.setting("search_group_" + key, "true") == "true"
+            rows.append([InlineKeyboardButton(text=("✅ " if enabled else "⬜ ") + "Поиск: " + label,
+                                              callback_data=f"toggle:search:{key}")])
+        return InlineKeyboardMarkup(inline_keyboard=rows)
+
+    def analytics_text(days: int | None) -> str:
+        values = repo.analytics(days)
+        applied, replied, won = values["applied"], values["replied"], values["won"]
+        response_rate = f"{values['replied_from_applied'] / applied:.0%}" if applied else "Недостаточно данных"
+        win_rate = f"{values['won_from_applied'] / applied:.0%}" if applied else "Недостаточно данных"
+        return (f"Аналитика: {days or 'всё время'} дн.\n"
+                f"Публикаций найдено: {values['found']}\n"
+                f"Уникальных заказов: {values['jobs']}\n"
+                f"Подходящих с бесплатным откликом: {values['unique']}\n"
+                f"Откликнулся: {applied} · Ответов: {replied} · Получил заказ: {won}\n"
+                f"Доля ответов: {response_rate} · Доля выигранных: {win_rate}")
+
+    def analytics_keyboard() -> InlineKeyboardMarkup:
+        return InlineKeyboardMarkup(inline_keyboard=[[
+            InlineKeyboardButton(text="7 дней", callback_data="analytics:7"),
+            InlineKeyboardButton(text="30 дней", callback_data="analytics:30"),
+            InlineKeyboardButton(text="Всё время", callback_data="analytics:all")]])
 
     async def switch_menu(message: Message, keyboard: ReplyKeyboardMarkup, title: str) -> None:
         await message.answer(title, reply_markup=keyboard, disable_notification=True)
@@ -359,9 +402,53 @@ def create_router(service) -> Router:
         values = repo.stats()
         await message.answer("\n".join(f"{key}: {value}" for key, value in values.items()))
 
+    @router.message(Command("analytics"))
+    async def analytics(message: Message):
+        await message.answer(analytics_text(30), reply_markup=analytics_keyboard())
+
+    @router.message(Command("insights"))
+    async def insights(message: Message):
+        queries = sorted(repo.search_queries(), key=lambda item: (item.suitable_jobs, item.new_sources, item.applications), reverse=True)[:5]
+        lines = ["Эффективность поиска:"]
+        lines.extend(f"• {q.phrase}: поисков {q.searches}, источников {q.new_sources}, подходящих {q.suitable_jobs}, дублей {q.duplicates}, откликов {q.applications}, ответов {q.replies}" for q in queries)
+        lines.append("Полезные каналы:")
+        lines.extend(f"• @{name}: {count} заказов, {apps} откликов, {replies} ответов, {wins} побед"
+                     for name, count, apps, replies, wins in repo.top_channels())
+        rejected = repo.rejection_counts()
+        if rejected:
+            lines.append("Причины отклонения: " + ", ".join(f"{reason} — {count}" for reason, count in rejected))
+        retry = repo.setting("discovery_retry_at")
+        if retry:
+            try:
+                until = datetime.fromisoformat(retry)
+                if until > datetime.now(timezone.utc):
+                    lines.append(f"Поиск ждёт лимит Telegram до {until.astimezone(ZoneInfo('Asia/Yekaterinburg')).strftime('%d.%m %H:%M')} (Екб)")
+            except ValueError:
+                pass
+        errors = [(q.phrase, q.last_error) for q in repo.search_queries() if q.last_error]
+        if errors:
+            lines.append("Последняя ошибка: " + errors[-1][0] + " — " + errors[-1][1])
+        await message.answer("\n".join(lines)[:4000])
+
     @router.message(Command("settings"))
     async def settings(message: Message):
-        await message.answer(settings_text())
+        await message.answer(settings_text(), reply_markup=settings_keyboard())
+
+    @router.message(Command("note"))
+    async def note(message: Message):
+        parts = (message.text or "").split(maxsplit=2)
+        if len(parts) < 3 or not parts[1].isdigit() or not repo.set_job_note(int(parts[1]), parts[2]):
+            await message.answer("Пример: /note 12 Созвон в пятницу")
+            return
+        await message.answer("Заметка сохранена")
+
+    @router.message(Command("amount"))
+    async def amount(message: Message):
+        parts = (message.text or "").split(maxsplit=2)
+        if len(parts) < 3 or not parts[1].isdigit() or not repo.set_job_amount(int(parts[1]), parts[2]):
+            await message.answer("Пример: /amount 12 25000 ₽")
+            return
+        await message.answer("Сумма сохранена")
 
     @router.message(Command("discover"))
     async def discover(message: Message):
@@ -408,12 +495,18 @@ def create_router(service) -> Router:
             return
         handlers = {"sources": sources, "pending": pending, "platforms": platforms,
                     "latest": latest, "top": top, "status": status, "check": check, "today": today, "discover": discover,
-                    "stats": stats, "settings": settings}
+                    "stats": stats, "analytics": analytics, "insights": insights, "settings": settings}
         await handlers[action](message)
 
     @router.message()
     async def channel_list(message: Message):
         raw = (message.text or "").strip()
+        pending = pending_input.pop(message.from_user.id, None) if message.from_user else None
+        if pending:
+            field, job_id = pending
+            saved = repo.set_job_note(job_id, raw) if field == "note" else repo.set_job_amount(job_id, raw)
+            await message.answer("Сохранено" if saved else "Заказ не найден")
+            return
         if raw.startswith("@") or raw.startswith("https://t.me/"):
             await add_channels(message, raw)
 
@@ -426,8 +519,38 @@ def create_router(service) -> Router:
                 await callback.answer()
                 handlers = {"sources": sources, "pending": pending, "platforms": platforms, "latest": latest,
                             "top": top, "status": status, "check": check, "today": today,
-                            "discover": discover, "stats": stats, "settings": settings}
+                            "discover": discover, "stats": stats, "analytics": analytics,
+                            "insights": insights, "settings": settings}
                 await handlers[action](callback.message)
+                return
+            if len(parts) == 3 and parts[0] == "toggle":
+                family, key = parts[1:]
+                if family == "employment" and key in EMPLOYMENT_LABELS:
+                    setting = "employment_" + key
+                elif family == "search" and key in DISCOVERY_GROUPS:
+                    setting = "search_group_" + key
+                else:
+                    await callback.answer("Неизвестная настройка", show_alert=True)
+                    return
+                current = repo.setting(setting, "false" if key == "full_time_role" else "true") == "true"
+                repo.set_setting(setting, "false" if current else "true")
+                await callback.message.edit_reply_markup(reply_markup=settings_keyboard())
+                await callback.answer("Настройка сохранена")
+                return
+            if len(parts) == 2 and parts[0] == "analytics" and parts[1] in {"7", "30", "all"}:
+                days = None if parts[1] == "all" else int(parts[1])
+                await callback.message.edit_text(analytics_text(days), reply_markup=analytics_keyboard())
+                await callback.answer()
+                return
+            if len(parts) == 3 and parts[0] == "field" and parts[1] in {"note", "amount"}:
+                job_id = int(parts[2])
+                if repo.job(job_id) is None:
+                    await callback.answer("Заказ не найден", show_alert=True)
+                    return
+                pending_input[callback.from_user.id] = (parts[1], job_id)
+                await callback.message.answer("Пришли заметку для заказа #" + str(job_id) if parts[1] == "note"
+                                              else "Пришли сумму и валюту для заказа #" + str(job_id))
+                await callback.answer()
                 return
             if len(parts) == 3 and parts[0] == "settings":
                 await callback.answer("Порог отключён: присылаются все подходящие IT-варианты", show_alert=True)

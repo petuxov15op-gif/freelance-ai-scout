@@ -41,6 +41,15 @@ class SearchQuery(Base):
     id: Mapped[int] = mapped_column(primary_key=True)
     phrase: Mapped[str] = mapped_column(String(255), unique=True)
     enabled: Mapped[bool] = mapped_column(Boolean, default=True)
+    group: Mapped[str] = mapped_column(String(30), default="development")
+    searches: Mapped[int] = mapped_column(Integer, default=0)
+    new_sources: Mapped[int] = mapped_column(Integer, default=0)
+    suitable_jobs: Mapped[int] = mapped_column(Integer, default=0)
+    duplicates: Mapped[int] = mapped_column(Integer, default=0)
+    applications: Mapped[int] = mapped_column(Integer, default=0)
+    replies: Mapped[int] = mapped_column(Integer, default=0)
+    last_success_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    last_error: Mapped[str | None] = mapped_column(Text)
 
 
 class Message(Base):
@@ -56,6 +65,7 @@ class Message(Base):
     discovered_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
     metadata_json: Mapped[dict] = mapped_column(JSON, default=dict)
     status: Mapped[str] = mapped_column(String(20), default="pending", index=True)
+    rejection_reason: Mapped[str | None] = mapped_column(String(60))
     __table_args__ = (UniqueConstraint("channel_id", "telegram_message_id"),)
 
 
@@ -66,6 +76,14 @@ class Job(Base):
     title: Mapped[str | None] = mapped_column(String(255))
     score: Mapped[int | None] = mapped_column(Integer, index=True)
     status: Mapped[str] = mapped_column(String(20), default="new")
+    employment_type: Mapped[str] = mapped_column(String(30), default="one_time_project")
+    contact_status: Mapped[str] = mapped_column(String(20), default="unknown")
+    contact_method: Mapped[str] = mapped_column(String(20), default="Другое")
+    contact_url: Mapped[str | None] = mapped_column(Text)
+    applied_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    replied_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    amount: Mapped[str | None] = mapped_column(String(100))
+    note: Mapped[str | None] = mapped_column(Text)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
 
 

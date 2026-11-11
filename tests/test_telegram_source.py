@@ -6,7 +6,13 @@ from types import SimpleNamespace
 import pytest
 from telethon import types
 
-from scout.telegram import TelegramSource, outbound_links
+from scout.telegram import TelegramSource, chat_search_term, outbound_links
+
+
+def test_chat_search_uses_substrings_suitable_for_contact_search():
+    assert chat_search_term("ищем разработчика на проект") == "разработ"
+    assert chat_search_term("looking for developer") == "developer"
+    assert chat_search_term("интеграция с CRM") == "интеграц"
 
 
 def test_outbound_links_reads_hidden_text_and_buttons():
@@ -92,6 +98,32 @@ async def test_inspect_rejects_stale_chat_and_old_examples(tmp_path):
     assert examples == []
     assert active is False
     assert ad_ratio == 0
+
+
+@pytest.mark.asyncio
+async def test_inspect_reports_repeats_and_reachable_posts(tmp_path):
+    source = TelegramSource(12345, "fake-hash", str(tmp_path / "session"))
+    now = datetime.now(timezone.utc)
+    posts = [
+        "Нужен Python-бот для заявок, бюджет 20000. Пишите @client12345",
+        "Нужен Python-бот для заявок, бюджет 20000. Пишите @client12345",
+        "Нужен сайт для кафе, бюджет 30000. Подробнее в канале",
+    ]
+
+    class Client:
+        def is_connected(self):
+            return True
+
+        async def iter_messages(self, entity, limit):
+            for body in posts:
+                yield SimpleNamespace(date=now, raw_text=body, entities=None, buttons=None)
+
+    source.client = Client()
+    inspected = await source.inspect(SimpleNamespace(username="jobs00001"))
+    examples, active, ad_ratio = inspected
+    assert len(examples) == 2 and active and ad_ratio == 0
+    assert inspected.repeat_ratio == pytest.approx(1 / 3)
+    assert inspected.contact_ratio == pytest.approx(2 / 3)
 
 
 @pytest.mark.asyncio

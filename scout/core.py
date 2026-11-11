@@ -123,6 +123,65 @@ def ongoing_role(text: str) -> bool:
     return "подработк" in normalized and not any(term in normalized for term in one_off)
 
 
+EMPLOYMENT_TYPES = ("one_time_project", "recurring_project", "part_time_role", "full_time_role")
+
+
+def employment_type(text: str) -> str:
+    value = normalize_text(text)
+    if any(term in value for term in ("полная занятость", "полный рабочий день", "полный день", "full time", "fulltime", "график 5 2", "в штат")):
+        return "full_time_role"
+    if any(term in value for term in ("частичная занятость", "неполная занятость", "неполный день", "part time", "parttime", "часа в день", "часов в неделю", "подработк")) and not any(term in value for term in ("разовая подработка", "разовый заказ")):
+        return "part_time_role"
+    if any(term in value for term in ("регулярн", "долгосрочн", "на постоянной основе", "постоянные задачи", "retainer")):
+        return "recurring_project"
+    if permanent_role(text):
+        return "full_time_role"
+    return "one_time_project"
+
+
+def contact_options(text: str, links: list[dict] | None = None, source_username: str | None = None,
+                    author_username: str | None = None) -> dict:
+    """Classify only contact paths evidenced by the announcement or its entities."""
+    options = []
+    source = (source_username or "").lower()
+    invitation = r"(?:пишите|напишите|написать|связаться|контакт|отклик|личк|dm\b|apply|contact|email|почт)"
+    evidence = text + " " + " ".join(link.get("label", "") for link in links or [])
+    paid = bool(re.search(r"(?<!\w)(?:платн\w*\s+отклик|оплат\w*\s+(?:за\s+)?отклик|отклик\w*\s+за\s+\d|paid\s+application)", evidence, re.I))
+    free = bool(re.search(r"(?:бесплатн\w*\s+отклик|отклик\w*\s+бесплатн|free\s+to\s+apply)", evidence, re.I))
+    for match in re.finditer(r"(?<![\w])(?:@|https?://t\.me/)([A-Za-z][A-Za-z0-9_]{4,31})\b", text, re.I):
+        name = match[1]
+        nearby = text[max(0, match.start() - 80):match.end() + 80]
+        if name.lower() != source and not name.lower().endswith("bot") and re.search(invitation, nearby, re.I):
+            options.append({"status": "direct_free", "method": "Telegram", "url": "https://t.me/" + name})
+    for match in re.finditer(r"(?<![\w.+-])[\w.+-]+@[\w.-]+\.[A-Za-z]{2,}\b", text):
+        options.append({"status": "direct_free", "method": "Email", "url": "mailto:" + match[0]})
+    if (author_username and re.fullmatch(r"[A-Za-z][A-Za-z0-9_]{4,31}", author_username)
+            and re.search(r"(?:пишите|напишите|обращайтесь)\s+автору|(?:dm|message)\s+the\s+author", text, re.I)):
+        options.append({"status": "direct_free", "method": "Telegram", "url": "https://t.me/" + author_username})
+    plain_links = [{"label": text[max(0, match.start() - 40):match.end() + 40], "url": match[0].rstrip(".,;)")}
+                   for match in re.finditer(r"https?://[^\s<>]+", text)]
+    for link in [*(links or []), *plain_links]:
+        label, url = link.get("label", ""), link.get("url", "")
+        parsed = urlsplit(url)
+        if parsed.scheme == "mailto" and re.fullmatch(r"[\w.+-]+@[\w.-]+\.[A-Za-z]{2,}", parsed.path):
+            options.append({"status": "direct_free", "method": "Email", "url": url})
+            continue
+        if parsed.scheme not in {"http", "https"} or not parsed.hostname:
+            continue
+        match = re.fullmatch(r"/([A-Za-z][A-Za-z0-9_]{4,31})/?", parsed.path) if parsed.hostname.lower() in {"t.me", "www.t.me"} else None
+        if match and match[1].lower() != source and not match[1].lower().endswith("bot") and re.search(invitation, label, re.I):
+            options.append({"status": "direct_free", "method": "Telegram", "url": url})
+        elif re.search(r"(?:отклик|подать заявку|заполнить форму|apply|submit application)", label, re.I):
+            options.append({"status": "platform_free" if free and not paid else "unknown", "method": "Форма", "url": url})
+    if paid:
+        return {"status": "paid", "method": options[0]["method"] if options else "Другое", "url": options[0]["url"] if options else None}
+    for status in ("direct_free", "platform_free", "unknown"):
+        match = next((option for option in options if option["status"] == status), None)
+        if match:
+            return match
+    return {"status": "none", "method": "Другое", "url": None}
+
+
 def explicit_ai_coding(text: str) -> bool:
     normalized = normalize_text(text)
     terms = ("вайбкод", "вайб код", "вайткод", "vibe cod", "vibecod", "codex", "cursor", "claude code",

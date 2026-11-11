@@ -25,7 +25,8 @@ def test_main_menu_groups_every_action_and_telegram_command_menu():
     assert labels == ["📋 Заказы", "📡 Каналы", "➕ Добавить канал", "📊 Бот"]
     assert {action for actions in MENU_SECTIONS.values() for action in actions} == set(MENU_LABELS)
     assert [[button.text for button in row] for row in section_menu("📡 Каналы").keyboard] == [
-        ["📡 Источники", "🕓 Кандидаты"], ["🔎 Найти чаты сейчас", "🏪 Площадки"], ["← Назад"]
+        ["📡 Источники", "🕓 Кандидаты"], ["🔎 Найти чаты сейчас", "📡 Эффективность поиска"],
+        ["🏪 Площадки"], ["← Назад"]
     ]
     assert main_menu().is_persistent is True
     assert {command.command for command in bot_commands()} >= {"menu", "sources", "add", "settings"}
