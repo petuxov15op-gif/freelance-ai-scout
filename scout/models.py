@@ -76,6 +76,8 @@ class Job(Base):
     title: Mapped[str | None] = mapped_column(String(255))
     score: Mapped[int | None] = mapped_column(Integer, index=True)
     status: Mapped[str] = mapped_column(String(20), default="new")
+    saved: Mapped[bool] = mapped_column(Boolean, default=False)
+    hidden: Mapped[bool] = mapped_column(Boolean, default=False)
     employment_type: Mapped[str] = mapped_column(String(30), default="one_time_project")
     contact_status: Mapped[str] = mapped_column(String(20), default="unknown")
     contact_method: Mapped[str] = mapped_column(String(20), default="Другое")

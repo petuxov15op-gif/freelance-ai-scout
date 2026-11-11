@@ -40,7 +40,7 @@ class Repository:
         with transaction(self.factory) as db:
             channel = db.scalar(select(Channel).where(Channel.telegram_id == telegram_id))
             if channel:
-                if query is None and channel.status == "rejected":
+                if query is None and channel.status in {"rejected", "removed"}:
                     channel.status = "pending"
                     channel.reviewed_at = None
                     channel.username = username
@@ -96,7 +96,11 @@ class Repository:
             channel.status = status
             channel.reviewed_at = utcnow()
             if status == "approved":
-                db.add(MonitoringState(channel_id=channel_id, last_message_id=initial_cursor))
+                state = db.get(MonitoringState, channel_id)
+                if state is None:
+                    db.add(MonitoringState(channel_id=channel_id, last_message_id=initial_cursor))
+                else:
+                    state.last_message_id = max(state.last_message_id, initial_cursor)
             return True
 
     def set_monitoring(self, channel_id: int, enabled: bool, latest_cursor: int = 0) -> bool:
@@ -119,6 +123,17 @@ class Repository:
                 db.execute(update(Message).where(Message.channel_id == channel_id, Message.status == "pending")
                            .values(status="irrelevant", rejection_reason="channel_paused"))
             channel.status = "approved" if enabled else "paused"
+            return True
+
+    def remove_source(self, channel_id: int) -> bool:
+        """Stop monitoring without deleting its messages, jobs or cursor."""
+        with transaction(self.factory) as db:
+            channel = db.get(Channel, channel_id)
+            if channel is None or channel.status not in {"approved", "paused"}:
+                return False
+            db.execute(update(Message).where(Message.channel_id == channel_id, Message.status == "pending")
+                       .values(status="irrelevant", rejection_reason="channel_paused"))
+            channel.status = "removed"
             return True
 
     def cursor(self, channel_id: int) -> int:
@@ -264,6 +279,48 @@ class Repository:
         with self.factory() as db:
             return list(db.scalars(select(Job).where(Job.score >= minimum_score).order_by(Job.created_at.desc()).limit(limit)))
 
+    def widget_jobs(self, limit: int = 3) -> list[Job]:
+        with self.factory() as db:
+            return list(db.scalars(select(Job).where(Job.score.is_not(None), Job.hidden.is_(False))
+                                   .order_by(Job.created_at.desc()).limit(limit)))
+
+    def set_widget_job_flag(self, job_id: int, flag: str, value: bool) -> bool:
+        if flag not in {"saved", "hidden"}:
+            raise ValueError("Недопустимое поле заказа")
+        with transaction(self.factory) as db:
+            job = db.get(Job, job_id)
+            if job is None:
+                return False
+            setattr(job, flag, value)
+            return True
+
+    def widget_dashboard(self) -> dict[str, int]:
+        since = utcnow() - timedelta(hours=24)
+        with self.factory() as db:
+            return {
+                "new": db.scalar(select(func.count()).select_from(Job).where(Job.created_at >= since)) or 0,
+                "matching": db.scalar(select(func.count()).select_from(Job).where(
+                    Job.contact_status.in_(("direct_free", "platform_free")))) or 0,
+                "saved": db.scalar(select(func.count()).select_from(Job).where(Job.saved.is_(True))) or 0,
+                "applied": db.scalar(select(func.count()).select_from(Job).where(Job.applied_at.is_not(None))) or 0,
+                "sources": db.scalar(select(func.count()).select_from(Channel).where(Channel.status == "approved")) or 0,
+            }
+
+    def widget_sources(self, page: int, size: int = 2) -> tuple[list[tuple[Channel, int, int]], int]:
+        with self.factory() as db:
+            total = db.scalar(select(func.count()).select_from(Channel).where(
+                Channel.status.in_(("approved", "paused")))) or 0
+            channels = list(db.scalars(select(Channel).where(Channel.status.in_(("approved", "paused")))
+                                       .order_by(Channel.id).offset((page - 1) * size).limit(size)))
+            rows = []
+            for channel in channels:
+                found = db.scalar(select(func.count()).select_from(Message).where(Message.channel_id == channel.id)) or 0
+                matching = db.scalar(select(func.count(func.distinct(JobSource.job_id)))
+                                     .join(Message, Message.id == JobSource.message_id)
+                                     .where(Message.channel_id == channel.id)) or 0
+                rows.append((channel, found, matching))
+            return rows, total
+
     def jobs_needing_contact(self, limit: int = 5) -> list[Job]:
         with self.factory() as db:
             return list(db.scalars(select(Job).where(Job.score >= 75, Job.contact_status.in_(("unknown", "none")))
@@ -307,6 +364,9 @@ class Repository:
             db.add(Feedback(job_id=job_id, action=action))
             job = db.get(Job, job_id)
             job.status = action
+            job.hidden = action == "irrelevant"
+            if action == "interesting":
+                job.saved = True
             first_application = action == "applied" and job.applied_at is None
             first_reply = action == "replied" and job.replied_at is None
             if first_application:

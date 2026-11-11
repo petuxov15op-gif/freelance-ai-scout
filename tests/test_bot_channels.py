@@ -25,8 +25,8 @@ def test_main_menu_groups_every_action_and_telegram_command_menu():
     assert labels == ["📋 Заказы", "📡 Каналы", "📡 Мои каналы", "➕ Добавить канал", "📊 Бот"]
     assert {action for actions in MENU_SECTIONS.values() for action in actions} == set(MENU_LABELS)
     assert [[button.text for button in row] for row in section_menu("📡 Каналы").keyboard] == [
-        ["📡 Мои каналы", "🕓 Кандидаты"], ["🔎 Найти чаты сейчас", "📡 Эффективность поиска"],
-        ["🏪 Площадки"], ["← Назад"]
+        ["📡 Мои каналы", "✨ Виджет источников"], ["🕓 Кандидаты", "🔎 Найти чаты сейчас"],
+        ["📡 Эффективность поиска", "🏪 Площадки"], ["← Назад"]
     ]
     assert main_menu().is_persistent is True
     assert {command.command for command in bot_commands()} >= {"menu", "sources", "channels", "add", "settings"}
@@ -96,7 +96,7 @@ async def test_menu_navigation_keeps_keyboard_message_and_removes_button_tap(rep
     await handler(message)
     submenu = message.answer.await_args.kwargs["reply_markup"]
     assert [[button.text for button in row] for row in submenu.keyboard] == [
-        ["📋 Последние", "⭐ Лучшие"], ["⚠️ Уточнить отклик"], ["← Назад"]]
+        ["📋 Последние", "✨ Карточки заказов"], ["⭐ Лучшие", "⚠️ Уточнить отклик"], ["← Назад"]]
     assert message.answer.await_args.args == ("Выбери действие",)
     message.delete.assert_awaited_once_with()
 
