@@ -174,11 +174,13 @@ async def test_widget_send_uses_bot_api_and_fallback(repo):
     _, job = seeded(repo)
     widget, bot = controller(repo)
     await widget.send("d")
+    bot.send_photo.assert_awaited_once()
+    method = bot.call_args.args[0] if bot.call_args else None
+    assert method is None
+    await widget.send("j", job.id)
     method = bot.call_args.args[0]
     assert isinstance(method, SendWidget)
     assert method.allow_queries is True
-    await widget.send("j", job.id)
-    method = bot.call_args.args[0]
     assert method.height == 580
     assert method.html == widget_html("j")
     bot.side_effect = RuntimeError("unsupported")

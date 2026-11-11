@@ -14,8 +14,9 @@ from zoneinfo import ZoneInfo
 from aiogram import Bot, Dispatcher
 from aiogram.exceptions import TelegramBadRequest
 from aiogram.methods import TelegramMethod
-from aiogram.types import Message, Update
+from aiogram.types import BufferedInputFile, Message, Update
 
+from .panel_image import render_panel
 from .service import JOB_STATUS_LABELS, job_text
 
 log = logging.getLogger(__name__)
@@ -200,6 +201,10 @@ class WidgetController:
         state = self.dashboard() if kind == "d" else self.sources(page) if kind == "s" else self.job(job_id or 0)
         if state is None:
             await self.bot.send_message(self.owner_id, "Заказ не найден")
+            return
+        if kind == "d":
+            await self.bot.send_photo(self.owner_id, BufferedInputFile(render_panel(state), filename="scout-panel.png"),
+                                      caption="Панель Freelance AI Scout")
             return
         try:
             await self.bot(SendWidget(chat_id=self.owner_id, html=widget_html(kind), chat_data=packed(state),
