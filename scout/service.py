@@ -496,7 +496,7 @@ class ScoutService:
                     log.exception("Повторное уведомление заказа %s не удалось", job.id)
 
     async def notify_job(self, job_id: int, kind: str) -> None:
-        from .cards import NO_PREVIEW, card_keyboard, card_text
+        from .cards import send_card
         message = self.repo.job_message(job_id)
         channel = self.repo.job_channel(job_id)
         job = self.repo.job(job_id)
@@ -505,9 +505,7 @@ class ScoutService:
         if not self.repo.claim_notification(job_id, kind):
             return
         try:
-            sent = await self.bot.send_message(
-                self.owner_id, card_text(self.repo, job_id), parse_mode="HTML", link_preview_options=NO_PREVIEW,
-                reply_markup=card_keyboard(job_id, self.repo.job_link(job_id), job.status, job.saved))
+            sent = await send_card(self.bot, self.repo, self.owner_id, job_id)
             self.repo.finish_notification(job_id, kind, sent.message_id)
         except Exception:
             self.repo.release_notification(job_id, kind)

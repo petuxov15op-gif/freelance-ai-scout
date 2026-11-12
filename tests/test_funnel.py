@@ -101,7 +101,7 @@ async def test_bot_settings_and_card_fields_are_saved(repo):
     service = ScoutService(repo, SimpleNamespace(), SimpleNamespace(), SimpleNamespace(), 1)
     router = create_router(service)
     callback_handler = router.callback_query.handlers[0].callback
-    output = SimpleNamespace(edit_reply_markup=AsyncMock(), edit_text=AsyncMock(), answer=AsyncMock())
+    output = SimpleNamespace(edit_reply_markup=AsyncMock(), edit_media=AsyncMock(), answer=AsyncMock())
     callback = SimpleNamespace(from_user=SimpleNamespace(id=1), message=output, answer=AsyncMock())
 
     callback.data = "toggle:employment:part_time_role"

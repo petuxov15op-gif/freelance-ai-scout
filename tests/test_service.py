@@ -69,42 +69,42 @@ class FakeAI:
 async def test_feedback_marks_card_and_allows_changing_decision(repo):
     channel = repo.candidate(100, "scoutjobs", "Jobs", "", None, 70, "", [])
     repo.transition_channel(channel.id, "approved")
-    bot = SimpleNamespace(send_message=AsyncMock(return_value=SimpleNamespace(message_id=42)))
+    bot = SimpleNamespace(send_photo=AsyncMock(return_value=SimpleNamespace(message_id=42)))
     service = ScoutService(repo, FakeSource(), FakeAI(), bot, 1)
     await service.monitor()
     job = repo.jobs()[0]
     callback_handler = create_router(service).callback_query.handlers[0].callback
-    message = SimpleNamespace(edit_text=AsyncMock(), edit_reply_markup=AsyncMock())
+    message = SimpleNamespace(edit_media=AsyncMock(), edit_reply_markup=AsyncMock())
     callback = SimpleNamespace(message=message, answer=AsyncMock(), from_user=SimpleNamespace(id=1))
 
     assert "Не подходит" in str(job_keyboard(job.id, None))
     callback.data = f"feedback:irrelevant:{job.id}"
     await callback_handler(callback)
     assert repo.job(job.id).status == "irrelevant"
-    assert "❌ Не подходит" in message.edit_text.await_args.args[0]
-    assert "Вернуть заказ" in str(message.edit_text.await_args.kwargs["reply_markup"])
-    assert "📌 Статус" in str(message.edit_text.await_args.kwargs["reply_markup"])
+    assert "Не подходит" in message.edit_media.await_args.kwargs["media"].caption
+    assert "Вернуть заказ" in str(message.edit_media.await_args.kwargs["reply_markup"])
+    assert "Статус отклика" in str(message.edit_media.await_args.kwargs["reply_markup"])
 
     callback.data = f"feedback:change:{job.id}"
     await callback_handler(callback)
-    assert "Снять статус" in str(message.edit_text.await_args.kwargs["reply_markup"])
+    assert "Снять статус" in str(message.edit_media.await_args.kwargs["reply_markup"])
 
     callback.data = f"feedback:interesting:{job.id}"
     await callback_handler(callback)
     assert repo.job(job.id).status == "interesting"
-    assert "⭐ Интересно" in message.edit_text.await_args.args[0]
+    assert "Интересно" in message.edit_media.await_args.kwargs["media"].caption
 
     callback.data = f"feedback:new:{job.id}"
     await callback_handler(callback)
     assert repo.job(job.id).status == "new"
-    assert "🆕 Новый" in message.edit_text.await_args.args[0]
+    assert "Новый" in message.edit_media.await_args.kwargs["media"].caption
 
 
 @pytest.mark.asyncio
 async def test_monitor_recovers_after_ai_outage(repo):
     channel = repo.candidate(100, "scoutjobs", "Jobs", "", None, 70, "", [])
     repo.transition_channel(channel.id, "approved")
-    bot = SimpleNamespace(send_message=AsyncMock(return_value=SimpleNamespace(message_id=42)))
+    bot = SimpleNamespace(send_photo=AsyncMock(return_value=SimpleNamespace(message_id=42)))
     service = ScoutService(repo, FakeSource(), FakeAI(fail=True), bot, 1)
     await service.monitor()
     assert repo.cursor(channel.id) == 1
@@ -116,9 +116,9 @@ async def test_monitor_recovers_after_ai_outage(repo):
     assert len(repo.pending_messages()) == 0
     assert service.last_monitor_errors == []
     assert repo.stats()["jobs"] == 1
-    assert bot.send_message.await_count == 1
+    assert bot.send_photo.await_count == 1
     await service.monitor()
-    assert bot.send_message.await_count == 1
+    assert bot.send_photo.await_count == 1
 
 
 @pytest.mark.asyncio
@@ -133,13 +133,13 @@ async def test_backfill_today_checks_posts_before_cursor_without_duplicate_notif
             assert since <= post.date
             yield post
 
-    bot = SimpleNamespace(send_message=AsyncMock(return_value=SimpleNamespace(message_id=42)))
+    bot = SimpleNamespace(send_photo=AsyncMock(return_value=SimpleNamespace(message_id=42)))
     service = ScoutService(repo, Source(), FakeAI(), bot, 1)
     assert await service.backfill_today() == (1, 1, 1, [])
     assert repo.cursor(channel.id) == 10
     assert repo.stats()["jobs"] == 1
     assert await service.backfill_today() == (1, 1, 0, [])
-    bot.send_message.assert_awaited_once()
+    bot.send_photo.assert_awaited_once()
 
 
 @pytest.mark.asyncio
@@ -154,12 +154,12 @@ async def test_suitable_job_is_sent_without_score_threshold(repo):
                 result["score"] = 25
             return result
 
-    bot = SimpleNamespace(send_message=AsyncMock(return_value=SimpleNamespace(message_id=42)))
+    bot = SimpleNamespace(send_photo=AsyncMock(return_value=SimpleNamespace(message_id=42)))
     service = ScoutService(repo, FakeSource(), SuitableAI(), bot, 1)
     await service.monitor()
-    bot.send_message.assert_awaited_once()
+    bot.send_photo.assert_awaited_once()
     await service.monitor()
-    bot.send_message.assert_awaited_once()
+    bot.send_photo.assert_awaited_once()
 
 
 @pytest.mark.asyncio
@@ -173,10 +173,10 @@ async def test_generic_remote_job_is_not_sent(repo):
                 yield SimpleNamespace(id=1, raw_text="Требуется чат-менеджер на удалённую работу, отвечать клиентам в Telegram",
                                       date=datetime.now(timezone.utc), media=None, fwd_from=None)
 
-    bot = SimpleNamespace(send_message=AsyncMock())
+    bot = SimpleNamespace(send_photo=AsyncMock())
     service = ScoutService(repo, GenericSource(), FakeAI(), bot, 1)
     await service.monitor()
-    bot.send_message.assert_not_awaited()
+    bot.send_photo.assert_not_awaited()
     assert repo.stats()["jobs"] == 0
 
 
@@ -192,10 +192,10 @@ async def test_regular_it_work_does_not_require_vibe_coding(repo):
                         "is_ongoing": True, "ai_coding_explicit": False, "reason": "найм"}
             return await super().ask(kind, text)
 
-    bot = SimpleNamespace(send_message=AsyncMock(return_value=SimpleNamespace(message_id=42)))
+    bot = SimpleNamespace(send_photo=AsyncMock(return_value=SimpleNamespace(message_id=42)))
     service = ScoutService(repo, FakeSource(), StrictAI(), bot, 1)
     await service.monitor()
-    bot.send_message.assert_awaited_once()
+    bot.send_photo.assert_awaited_once()
     assert repo.stats()["jobs"] == 1
 
 
@@ -217,13 +217,13 @@ async def test_permanent_it_role_with_explicit_vibe_coding_is_sent(repo):
                         "is_ongoing": True, "ai_coding_explicit": True, "reason": "разработка с Codex"}
             return await super().ask(kind, text)
 
-    bot = SimpleNamespace(send_message=AsyncMock(return_value=SimpleNamespace(message_id=42)))
+    bot = SimpleNamespace(send_photo=AsyncMock(return_value=SimpleNamespace(message_id=42)))
     service = ScoutService(repo, VibeSource(), VibeAI(), bot, 1)
     repo.set_setting("employment_full_time_role", "true")
     await service.monitor()
-    bot.send_message.assert_awaited_once()
+    bot.send_photo.assert_awaited_once()
     await service.monitor()
-    bot.send_message.assert_awaited_once()
+    bot.send_photo.assert_awaited_once()
 
 
 @pytest.mark.asyncio
@@ -237,10 +237,10 @@ async def test_full_time_is_disabled_by_default_even_without_ai_coding(repo):
                 yield SimpleNamespace(id=1, raw_text="Вакансия Python-разработчика в штат: писать ботов для клиентов, зарплата 120000 рублей",
                                       date=datetime.now(timezone.utc), media=None, fwd_from=None)
 
-    bot = SimpleNamespace(send_message=AsyncMock())
+    bot = SimpleNamespace(send_photo=AsyncMock())
     service = ScoutService(repo, OrdinaryRoleSource(), FakeAI(), bot, 1)
     await service.monitor()
-    bot.send_message.assert_not_awaited()
+    bot.send_photo.assert_not_awaited()
 
 
 @pytest.mark.asyncio
@@ -267,10 +267,10 @@ async def test_part_time_and_one_off_without_ai_coding(repo, announcement, shoul
                         "ai_coding_explicit": "Codex" in text, "reason": "IT-задача"}
             return await super().ask(kind, text)
 
-    bot = SimpleNamespace(send_message=AsyncMock(return_value=SimpleNamespace(message_id=42)))
+    bot = SimpleNamespace(send_photo=AsyncMock(return_value=SimpleNamespace(message_id=42)))
     service = ScoutService(repo, PartTimeSource(), PartTimeAI(), bot, 1)
     await service.monitor()
-    assert bot.send_message.await_count == int(should_send)
+    assert bot.send_photo.await_count == int(should_send)
 
 
 @pytest.mark.asyncio
@@ -291,10 +291,10 @@ async def test_explicit_vibe_coding_part_time_is_sent_when_ai_mislabels_it_and_p
                         "is_ongoing": True, "ai_coding_explicit": False, "reason": "оплачиваемая подработка"}
             return await super().ask(kind, text)
 
-    bot = SimpleNamespace(send_message=AsyncMock(return_value=SimpleNamespace(message_id=42)))
+    bot = SimpleNamespace(send_photo=AsyncMock(return_value=SimpleNamespace(message_id=42)))
     service = ScoutService(repo, VibeSource(), MislabelingAI(), bot, 1)
     await service.monitor()
-    bot.send_message.assert_not_awaited()
+    bot.send_photo.assert_not_awaited()
     assert repo.stats()["jobs"] == 0
 
 
@@ -310,10 +310,10 @@ async def test_it_project_must_be_feasible_with_codex(repo):
                         "is_ongoing": False, "ai_coding_explicit": False, "reason": "нужна команда"}
             return await super().ask(kind, text)
 
-    bot = SimpleNamespace(send_message=AsyncMock())
+    bot = SimpleNamespace(send_photo=AsyncMock())
     service = ScoutService(repo, FakeSource(), HardProjectAI(), bot, 1)
     await service.monitor()
-    bot.send_message.assert_not_awaited()
+    bot.send_photo.assert_not_awaited()
 
 
 @pytest.mark.asyncio
@@ -331,13 +331,13 @@ async def test_high_risk_or_office_role_is_not_notified_even_with_permissive_ai(
                                   date=datetime.now(timezone.utc), media=None, fwd_from=None)
 
     ai = SimpleNamespace(ask=AsyncMock())
-    bot = SimpleNamespace(send_message=AsyncMock())
+    bot = SimpleNamespace(send_photo=AsyncMock())
     service = ScoutService(repo, Source(), ai, bot, 1)
     await service.monitor()
     assert repo.stats()["jobs"] == 0
     assert repo.rejection_counts() == [(reason, 1)]
     ai.ask.assert_not_awaited()
-    bot.send_message.assert_not_awaited()
+    bot.send_photo.assert_not_awaited()
 
 
 @pytest.mark.asyncio
@@ -350,7 +350,7 @@ async def test_telegram_outage_keeps_cursor(repo):
             raise RuntimeError("Telegram недоступен")
             yield  # make async generator
 
-    bot = SimpleNamespace(send_message=AsyncMock())
+    bot = SimpleNamespace(send_photo=AsyncMock())
     service = ScoutService(repo, BrokenSource(), FakeAI(), bot, 1)
     await service.monitor()
     assert repo.cursor(channel.id) == 0
@@ -522,13 +522,13 @@ async def test_monitor_does_not_notify_kwork_post(repo):
             yield SimpleNamespace(id=1, raw_text="Нужен сайт для компании, отклик через Kwork.ru",
                                   date=datetime.now(timezone.utc), media=None, fwd_from=None)
 
-    bot = SimpleNamespace(send_message=AsyncMock())
+    bot = SimpleNamespace(send_photo=AsyncMock())
     ai = FakeAI()
     service = ScoutService(repo, KworkSource(), ai, bot, 1)
     await service.monitor()
     assert repo.stats()["jobs"] == 1
     assert repo.jobs()[0].contact_status == "none"
-    bot.send_message.assert_not_awaited()
+    bot.send_photo.assert_not_awaited()
 
 
 @pytest.mark.asyncio
@@ -545,7 +545,7 @@ async def test_platform_posts_and_sources_resume_from_menu_setting(repo):
                                   date=datetime.now(timezone.utc), media=None, fwd_from=None)
 
     source = PlatformSource()
-    bot = SimpleNamespace(send_message=AsyncMock(return_value=SimpleNamespace(message_id=42)))
+    bot = SimpleNamespace(send_photo=AsyncMock(return_value=SimpleNamespace(message_id=42)))
     service = ScoutService(repo, source, FakeAI(), bot, 1)
     await service.monitor()
     assert source.calls == 0
@@ -553,7 +553,7 @@ async def test_platform_posts_and_sources_resume_from_menu_setting(repo):
     await service.monitor()
     assert source.calls == 1
     assert repo.stats()["jobs"] == 1
-    bot.send_message.assert_not_awaited()
+    bot.send_photo.assert_not_awaited()
 
 
 @pytest.mark.asyncio
@@ -570,11 +570,11 @@ async def test_mixed_channel_sends_direct_contact_but_skips_fl(repo):
                 yield SimpleNamespace(id=number, raw_text=text, date=datetime.now(timezone.utc),
                                       media=None, fwd_from=None)
 
-    bot = SimpleNamespace(send_message=AsyncMock(return_value=SimpleNamespace(message_id=42)))
+    bot = SimpleNamespace(send_photo=AsyncMock(return_value=SimpleNamespace(message_id=42)))
     service = ScoutService(repo, MixedSource(), FakeAI(), bot, 1)
     await service.monitor()
     assert repo.stats()["jobs"] == 2
-    bot.send_message.assert_awaited_once()
+    bot.send_photo.assert_awaited_once()
 
 
 @pytest.mark.asyncio
@@ -592,11 +592,11 @@ async def test_external_and_unknown_posts_are_assessed_but_not_notified(repo):
                                       media=None, fwd_from=None)
 
     ai = FakeAI()
-    bot = SimpleNamespace(send_message=AsyncMock())
+    bot = SimpleNamespace(send_photo=AsyncMock())
     service = ScoutService(repo, ExternalSource(), ai, bot, 1)
     await service.monitor()
     assert repo.stats()["jobs"] == 2
-    bot.send_message.assert_not_awaited()
+    bot.send_photo.assert_not_awaited()
 
 
 @pytest.mark.asyncio

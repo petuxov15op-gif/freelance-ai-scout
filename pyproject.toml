@@ -14,6 +14,7 @@ dependencies = [
   "alembic>=1.15,<2",
   "APScheduler>=3.11,<4",
   "httpx[socks]>=0.28,<1",
+  "Pillow>=11,<14",
 ]
 
 [project.optional-dependencies]
@@ -21,6 +22,9 @@ dev = ["pytest>=8,<10", "pytest-asyncio>=1,<2"]
 
 [tool.setuptools.packages.find]
 include = ["scout*"]
+
+[tool.setuptools.package-data]
+scout = ["assets/fonts/*.ttf", "assets/fonts/*.txt"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

@@ -2,25 +2,29 @@
 from __future__ import annotations
 
 import logging
+import asyncio
+import re
 from html import escape
 
 from aiogram.exceptions import TelegramBadRequest
-from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup, LinkPreviewOptions
+from aiogram.types import BufferedInputFile, InlineKeyboardButton, InlineKeyboardMarkup, InputMediaPhoto
 
 from .service import CONTACT_LABELS, JOB_STATUS_LABELS
+from .card_image import render_order_image
 
 log = logging.getLogger(__name__)
-NO_PREVIEW = LinkPreviewOptions(is_disabled=True)
 
 
 def safe(value, limit=300):
     text = str(value or "")
-    return escape(text[:limit] + ("…" if len(text) > limit else ""))
+    encoded = text.encode("utf-16-le")
+    clipped = encoded[:limit * 2].decode("utf-16-le", errors="ignore")
+    return escape(clipped + ("…" if len(encoded) > limit * 2 else ""))
 
 
 def card_keyboard(job_id, link=None, status="new", following=False, view="home"):
-    def button(text, action):
-        return InlineKeyboardButton(text=text, callback_data=f"card:{action}:{job_id}")
+    def button(text, action, style=None):
+        return InlineKeyboardButton(text=text, callback_data=f"card:{action}:{job_id}", style=style)
 
     back = [button("← К заказу", "home")]
     if view == "statuses":
@@ -30,81 +34,98 @@ def card_keyboard(job_id, link=None, status="new", following=False, view="home")
         rows.extend([[InlineKeyboardButton(text="Снять статус", callback_data=f"feedback:new:{job_id}")], back])
     elif view == "notes":
         rows = [[InlineKeyboardButton(text="✏️ Изменить заметку", callback_data=f"field:note:{job_id}"),
-                 InlineKeyboardButton(text="💰 Моя цена", callback_data=f"field:amount:{job_id}")], back]
+                 InlineKeyboardButton(text="💰 Моя цена", callback_data=f"field:amount:{job_id}")],
+                [button("Полный текст .txt", "file_notes")], back]
     elif view == "draft":
         rows = [[InlineKeyboardButton(text="✏️ Изменить отклик", callback_data=f"field:draft:{job_id}")],
-                [button("🔄 Новый вариант", "redraft")], back]
+                [button("Новый вариант", "redraft")], [button("Полный текст .txt", "file_draft")], back]
     elif view == "input":
         rows = [[button("Отменить ввод", "cancel")]]
     elif view in {"plan", "source"}:
-        rows = [back]
+        rows = [[button("Полный текст .txt", "file_" + view)], back]
     else:
         source = (InlineKeyboardButton(text="↗ Объявление", url=link) if link
                   else button("📄 Объявление", "source"))
         rows = [
-            [button("⏹ Не отслеживать" if following else "👀 Отслеживать заказ", "unfollow" if following else "follow")],
-            [InlineKeyboardButton(text="✍️ Отклик", callback_data=f"draft:{job_id}"),
-             InlineKeyboardButton(text="🔎 Разбор", callback_data=f"plan:{job_id}")],
-            [source, InlineKeyboardButton(text="↩️ Вернуть заказ" if status == "irrelevant" else "✕ Не подходит",
+            [button("◉ Не отслеживать" if following else "◎ Отслеживать заказ", "unfollow" if following else "follow", "primary")],
+            [InlineKeyboardButton(text="Написать отклик", callback_data=f"draft:{job_id}"),
+             InlineKeyboardButton(text="Разобрать заказ", callback_data=f"plan:{job_id}")],
+            [source, InlineKeyboardButton(text="Вернуть заказ" if status == "irrelevant" else "× Не подходит",
                                           callback_data=f"feedback:{'new' if status == 'irrelevant' else 'irrelevant'}:{job_id}")],
-            [button("📌 Статус", "statuses"), button("📝 Заметка / цена", "notes")],
+            [button("Статус отклика", "statuses"), button("Заметка / цена", "notes")],
         ]
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
-def card_text(repo, job_id, view="home", notice="", sample=False):
+def budget_text(data):
+    budget = str(data.get("budget") or "не указан")
+    currency = str(data.get("currency") or "")
+    present = (any(unit in budget.lower() for unit in ("₽", "руб", "rub"))
+               if currency.lower() in {"₽", "руб", "rub"} else currency.lower() in budget.lower())
+    return budget + (" " + currency if data.get("budget") and currency and not present else "")
+
+
+def detail_text(repo, job_id, view):
+    if view == "plan":
+        cached = repo.analysis(job_id, "plan_card")
+        data = cached.result if cached else {}
+        body = "\n".join(f"{i}. {line}" for i, line in enumerate(data.get("plan", []), 1))
+        if data.get("questions"):
+            body += "\n\nЧто уточнить:\n" + "\n".join("• " + line for line in data["questions"])
+        return body or "Разбор пока не сохранён."
+    if view == "draft":
+        cached = repo.analysis(job_id, "draft_saved")
+        return cached.result["draft"] if cached else "Черновик пока не подготовлен."
+    if view == "notes":
+        job = repo.job(job_id)
+        return f"Моя цена: {job.amount or 'не указана'}\n\nЗаметка: {job.note or 'нет заметки'}"
+    return repo.job_original(job_id) or "Текст объявления недоступен."
+
+
+async def card_media(repo, job_id, view="home", notice="", sample=False):
     job = repo.job(job_id)
     analysis = repo.analysis(job_id)
     data = analysis.result if analysis else {}
-    heading = "🧪 Тест карточки · сохранённый заказ" if sample else "📋 Заказ"
-    parts = [f"{heading} #{job.id}", f"<b>{safe(data.get('title') or job.title or 'Без названия', 180)}</b>"]
-    requirements = data.get("requirements") or []
-    if requirements:
-        parts.append(safe(" · ".join(requirements[:4]), 350))
-    budget = str(data.get("budget") or "не указан")
-    currency = str(data.get("currency") or "")
-    currency_present = (any(unit in budget.lower() for unit in ("₽", "руб", "rub"))
-                        if currency.lower() in {"₽", "руб", "rub"} else currency.lower() in budget.lower())
-    if data.get("budget") and currency and not currency_present:
-        budget += " " + currency
-    parts.append(f"💰 <b>{safe(budget, 80)}</b>   ·   ⏱ {safe(data.get('deadline') or 'срок не указан', 70)}\n"
-                 f"⭐ <b>{job.score if job.score is not None else '—'}/100</b> · ИИ-рейтинг")
-    parts.append(f"{'👀 Отслеживается' if job.saved else 'Не отслеживается'}\n"
-                 f"{JOB_STATUS_LABELS.get(job.status, '🆕 Новый')}\n"
-                 f"Отклик: {CONTACT_LABELS.get(job.contact_status, 'Не подтверждено')}")
-    if view == "home":
-        if job.contact_url and job.contact_status in {"direct_free", "platform_free"}:
-            parts.append(f"Контакт: {safe(job.contact_url, 250)}")
-        if job.amount:
-            parts.append(f"<b>Моя цена:</b> {safe(job.amount, 100)}")
-        if job.note:
-            parts.append(f"<b>Заметка:</b> {safe(job.note, 300)}")
-    elif view == "plan":
-        plan = repo.analysis(job_id, "plan_card")
-        result = plan.result if plan else {}
-        body = "\n".join(f"{i}. {line}" for i, line in enumerate(result.get("plan", []), 1))
-        if result.get("questions"):
-            body += "\n\nЧто уточнить:\n" + "\n".join("• " + q for q in result["questions"])
-        parts.append("<b>Разбор и план</b>\n" + safe(body or "Разбор пока не сохранён.", 2100))
-    elif view == "draft":
-        draft = repo.analysis(job_id, "draft_saved")
-        text = draft.result.get("draft", "") if draft else "Отклик пока не подготовлен."
-        parts.append("<b>Черновик отклика</b>\n" + safe(text, 2100))
-        if len(text) > 2100:
-            parts.append("<i>Показаны первые 2100 символов сохранённого черновика.</i>")
-        parts.append("<i>Черновик сохраняется у тебя. Заказчику автоматически не отправляется.</i>")
-    elif view == "notes":
-        parts.append(f"<b>Моя цена:</b> {safe(job.amount or 'не указана', 100)}\n"
-                     f"<b>Заметка:</b> {safe(job.note or 'нет заметки', 1000)}")
-    elif view == "source":
-        parts.append("<b>Исходное объявление</b>\n" + safe(repo.job_original(job_id) or "Текст недоступен", 2100))
+    channel = repo.job_channel(job_id)
+    title = data.get("title") or job.title or "Без названия"
+    section = {"plan": "Разбор и план", "draft": "Черновик отклика", "notes": "Заметка и моя цена",
+               "source": "Исходное объявление", "statuses": "Статус отклика", "input": "Редактирование"}.get(view, "Заказ")
+    state = re.sub(r"^[^\w]+", "", JOB_STATUS_LABELS.get(job.status, "Новый"))
+    payload = {"title": title, "summary": " · ".join((data.get("requirements") or [])[:4]),
+               "source": f"ЗАКАЗ #{job_id}" + (f"  ·  @{channel.username}" if channel and channel.username else ""),
+               "budget": budget_text(data), "deadline": str(data.get("deadline") or "Не указан"),
+               "score": f"{job.score if job.score is not None else '—'}/100", "status": state,
+               "following": job.saved, "contact": "Отклик: " + CONTACT_LABELS.get(job.contact_status, "Не подтверждено"),
+               "amount": job.amount, "note": job.note, "notice": notice, "sample": sample,
+               "view": view, "section": section}
+    if view in {"plan", "draft", "notes", "source"}:
+        body = detail_text(repo, job_id, view)
+        caption = f"<b>{section}</b>\n\n" + safe(body, 850)
+        if len(body) > 850:
+            caption += "\n\n<i>Показан фрагмент. Полный текст доступен отдельным файлом.</i>"
+        if view == "draft":
+            caption += "\n\n<i>Заказчику не отправляется.</i>"
+    elif view == "input":
+        caption = safe(notice)
     elif view == "statuses":
-        parts.append("<b>Выбери этап работы с заказом ↓</b>")
-    if notice:
-        parts.append(safe(notice, 500))
-    if sample:
-        parts.append("<i>Пример из базы, не новый заказ. Кнопки сохраняют твои изменения.</i>")
-    return "\n\n".join(parts)
+        caption = "Выбери этап работы с заказом ↓"
+    else:
+        caption = (f"🧪 #{job_id}" if sample else f"Заказ #{job_id}") + f" · {safe(state)}"
+        if notice:
+            caption += "\n" + safe(notice, 350)
+    if sample and view != "home":
+        caption = "🧪 Пример из базы · " + caption
+    image = await asyncio.to_thread(render_order_image, payload)
+    return InputMediaPhoto(media=BufferedInputFile(image, filename=f"scout-order-{job_id}.png"),
+                           caption=caption, parse_mode="HTML")
+
+
+async def send_card(bot, repo, owner_id, job_id, sample=False):
+    job = repo.job(job_id)
+    media = await card_media(repo, job_id, sample=sample)
+    return await bot.send_photo(owner_id, media.media, caption=media.caption, parse_mode="HTML",
+                                reply_markup=card_keyboard(job_id, repo.job_link(job_id), job.status, job.saved))
+
 
 
 class OrderCards:
@@ -116,11 +137,11 @@ class OrderCards:
 
     async def show(self, message, job_id, view="home", notice=""):
         job = self.repo.job(job_id)
-        sample = (getattr(message, "text", "") or "").startswith("🧪")
+        sample = (getattr(message, "caption", "") or getattr(message, "text", "") or "").startswith("🧪")
         try:
-            await message.edit_text(card_text(self.repo, job_id, view, notice, sample), parse_mode="HTML",
-                                    link_preview_options=NO_PREVIEW,
-                                    reply_markup=card_keyboard(job_id, self.repo.job_link(job_id), job.status, job.saved, view))
+            media = await card_media(self.repo, job_id, view, notice, sample)
+            await message.edit_media(media=media,
+                                     reply_markup=card_keyboard(job_id, self.repo.job_link(job_id), job.status, job.saved, view))
         except TelegramBadRequest as exc:
             if "message is not modified" not in str(exc).lower():
                 raise
@@ -168,6 +189,11 @@ class OrderCards:
             return
         self.pending.pop(callback.from_user.id, None)
         view, notice = "home", ""
+        if kind == "card" and action in {"file_plan", "file_draft", "file_source", "file_notes"}:
+            await callback.answer()
+            content = detail_text(self.repo, job_id, action.removeprefix("file_"))
+            await callback.message.answer_document(BufferedInputFile(content.encode("utf-8"), filename=f"order-{job_id}-{action[5:]}.txt"))
+            return
         if kind == "card" and action in {"home", "statuses", "notes", "source"}:
             view = action
         elif kind == "card" and action in {"follow", "unfollow"}:
