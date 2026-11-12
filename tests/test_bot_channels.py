@@ -99,7 +99,7 @@ async def test_menu_navigation_keeps_keyboard_message_and_removes_button_tap(rep
     await handler(message)
     submenu = message.answer.await_args.kwargs["reply_markup"]
     assert [[button.text for button in row] for row in submenu.keyboard] == [
-        ["📋 Последние", "⭐ Лучшие"], ["← Назад"]]
+        ["📋 Последние", "⭐ Лучшие"], ["👀 Отслеживаемые"], ["← Назад"]]
     assert message.answer.await_args.args == ("Выбери действие",)
     message.delete.assert_awaited_once_with()
 

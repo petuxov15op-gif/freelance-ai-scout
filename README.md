@@ -13,6 +13,7 @@ A personal Telegram bot that monitors owner-approved channels for relevant freel
 - Recognizes Telegram contacts, hidden links, email, and application forms. Only confirmed free contact paths enter instant notifications; paid and unconfirmed paths do not fill the main feed. High-scoring posts with unconfirmed contact remain available under **Jobs → Check contact**. Audited platform sources remain paused by default and can be resumed with **Channels → Platforms**.
 - Uses OpenRouter for structured analysis and sends every qualifying opportunity without a score threshold. Search queries are grouped and prioritized using observed source, job, application, and reply outcomes.
 - Groups reposts when the contact or source supports the match, tracks rejection reasons and manual application statuses, shows 7-day, 30-day, and all-time analytics, and prepares reply drafts for owner review.
+- Sends native interactive order cards with follow/unfollow, reply draft, analysis, source, rejection, status, note, and price actions. Analysis and drafts open in the same message; choices and edited drafts persist in SQLite. No Mini App, domain, or tunnel is required for these cards.
 
 The bot does not join channels on its own or send applications to clients.
 
@@ -77,7 +78,7 @@ The named `scout_data` volume holds the SQLite database and Telegram session. Pr
 
 ## Using the bot
 
-Send `/start` to show the four-button menu: **Jobs**, **Channels**, **Add channel**, and **Bot**. Tap a section to switch the bottom keyboard to its actions; use **Back** to return. **Channels** includes **Find chats now** and **Search performance**. **Bot → Settings** toggles employment categories and search groups; **Bot → Applications** shows analytics. To add a channel, send a public `@username` or `t.me` link and confirm **Add** on its card. Job cards let you change status, add a note or amount, and prepare a reply draft. Commands include `/status`, `/sources`, `/pending`, `/latest`, `/top`, `/stats`, `/analytics`, `/settings`, and `/add`.
+Send `/start` to show the bottom menu. Tap a section to switch the keyboard to its actions; use **Back** to return. **Jobs → Following** opens saved orders; following is independent of the application status. **Latest** and **Best** show buttons that open each order's card. In a card, **Reply** prepares and saves a draft, **Analysis** opens the plan, and **Back to order** restores the main buttons. **Note / price** and **Edit reply** ask for text in the chat and update the original card; **Cancel input** leaves the saved value unchanged. Drafts are never sent to clients. **Channels** includes **Find chats now** and **Search performance**. **Bot → Settings** toggles employment categories and search groups; **Bot → Applications** shows analytics. To add a channel, send a public `@username` or `t.me` link and confirm **Add** on its card. Commands include `/status`, `/sources`, `/pending`, `/latest`, `/top`, `/stats`, `/analytics`, `/settings`, and `/add`.
 
 ## Mini App interface preview
 

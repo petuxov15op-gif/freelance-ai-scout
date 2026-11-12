@@ -11,19 +11,21 @@ from aiogram.exceptions import TelegramBadRequest
 from aiogram.types import (BotCommand, CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup,
                            KeyboardButton, Message, ReplyKeyboardMarkup)
 
-from .service import CONTACT_LABELS, DISCOVERY_GROUPS, EMPLOYMENT_LABELS, JOB_STATUS_LABELS, job_text
+from .service import DISCOVERY_GROUPS, EMPLOYMENT_LABELS, JOB_STATUS_LABELS
 from .telegram import parse_public_channel
+from .cards import OrderCards, card_keyboard
 
 log = logging.getLogger(__name__)
 
 MENU_SECTIONS = {
-    "📋 Заказы": ("latest", "top"),
+    "📋 Заказы": ("latest", "top", "followed"),
     "📡 Каналы": ("sources", "pending", "discover", "insights", "platforms"),
     "📊 Бот": ("status", "check", "today", "stats", "analytics", "settings"),
 }
 MENU_LABELS = {
     "latest": "📋 Последние",
     "top": "⭐ Лучшие",
+    "followed": "👀 Отслеживаемые",
     "sources": "📡 Мои каналы",
     "pending": "🕓 Кандидаты",
     "discover": "🔎 Найти чаты сейчас",
@@ -137,31 +139,7 @@ def candidate_digest_keyboard(channel_ids: list[int]) -> InlineKeyboardMarkup:
 
 
 def job_keyboard(job_id: int, link: str | None, status: str = "new", editing: bool = False) -> InlineKeyboardMarkup:
-    rows = []
-    if link:
-        rows.append([InlineKeyboardButton(text="Открыть объявление", url=link)])
-    rows.append(
-        [InlineKeyboardButton(text="Разобрать заказ", callback_data=f"plan:{job_id}"),
-         InlineKeyboardButton(text="Подготовить отклик", callback_data=f"draft:{job_id}")]
-    )
-    if status != "new" and not editing:
-        rows.append([InlineKeyboardButton(text="Изменить решение", callback_data=f"feedback:change:{job_id}")])
-    else:
-        rows.extend([
-            [InlineKeyboardButton(text="Интересно", callback_data=f"feedback:interesting:{job_id}"),
-             InlineKeyboardButton(text="Не подходит", callback_data=f"feedback:irrelevant:{job_id}")],
-            [InlineKeyboardButton(text="Откликнулся", callback_data=f"feedback:applied:{job_id}"),
-             InlineKeyboardButton(text="Заказчик ответил", callback_data=f"feedback:replied:{job_id}")],
-            [InlineKeyboardButton(text="Обсуждаем", callback_data=f"feedback:negotiating:{job_id}"),
-             InlineKeyboardButton(text="Получил заказ", callback_data=f"feedback:won:{job_id}")],
-            [InlineKeyboardButton(text="Отказ", callback_data=f"feedback:rejected:{job_id}"),
-             InlineKeyboardButton(text="Не ответили", callback_data=f"feedback:no_reply:{job_id}")],
-        ])
-        if status != "new":
-            rows.append([InlineKeyboardButton(text="Снять отметку", callback_data=f"feedback:new:{job_id}")])
-    rows.append([InlineKeyboardButton(text="Заметка", callback_data=f"field:note:{job_id}"),
-                 InlineKeyboardButton(text="Сумма", callback_data=f"field:amount:{job_id}")])
-    return InlineKeyboardMarkup(inline_keyboard=rows)
+    return card_keyboard(job_id, link, status, view="statuses" if editing else "home")
 
 
 async def health_text(service) -> str:
@@ -244,7 +222,7 @@ def create_router(service) -> Router:
     router.message.middleware(OwnerMiddleware(service.owner_id))
     router.callback_query.middleware(OwnerMiddleware(service.owner_id))
     repo = service.repo
-    pending_input: dict[int, tuple[str, int]] = {}
+    cards = OrderCards(service)
     shown_channels: dict[int, tuple[datetime, list[int]]] = {}
 
     def channel_page(mode: str, page: int, user_id: int) -> tuple[str, InlineKeyboardMarkup]:
@@ -498,12 +476,24 @@ def create_router(service) -> Router:
     @router.message(Command("latest"))
     async def latest(message: Message):
         jobs = repo.jobs()
-        await message.answer("\n".join(f"{JOB_STATUS_LABELS.get(j.status, '🆕 Новый')} · #{j.id} · {j.score} · {j.title}" for j in jobs)[:4000] or "Заказов пока нет")
+        await job_list(message, jobs, "Последние заказы")
 
     @router.message(Command("top"))
     async def top(message: Message):
         jobs = sorted(repo.jobs(60, 50), key=lambda item: item.score or 0, reverse=True)[:10]
-        await message.answer("\n".join(f"#{j.id} · {j.score} · {j.title}" for j in jobs)[:4000] or "Подходящих заказов пока нет")
+        await job_list(message, jobs, "Лучшие заказы")
+
+    async def followed(message: Message):
+        await job_list(message, repo.followed_jobs(), "Отслеживаемые заказы")
+
+    async def job_list(message, jobs, title):
+        if not jobs:
+            await message.answer("Отслеживаемых заказов пока нет. Нажми «Отслеживать заказ» в карточке."
+                                 if title == "Отслеживаемые заказы" else "Заказов пока нет")
+            return
+        rows = [[InlineKeyboardButton(text=f"#{j.id} · {j.score}/100 · {j.title or 'Заказ'}"[:64],
+                                      callback_data=f"card:home:{j.id}")] for j in jobs]
+        await message.answer(title + " — выбери карточку:", reply_markup=InlineKeyboardMarkup(inline_keyboard=rows))
 
     @router.message(Command("stats"))
     async def stats(message: Message):
@@ -586,6 +576,9 @@ def create_router(service) -> Router:
     @router.message(F.text.in_({*MENU_SECTIONS, ADD_CHANNEL_LABEL, BACK_LABEL,
                                 *MENU_LABELS.values(), *MENU_ACTIONS}))
     async def menu_action(message: Message):
+        user = getattr(message, "from_user", None)
+        if user:
+            cards.pending.pop(user.id, None)
         if message.text in MENU_SECTIONS:
             await switch_menu(message, section_menu(message.text), "Выбери действие")
             return
@@ -602,20 +595,16 @@ def create_router(service) -> Router:
             await message.answer("Пришлите @имя канала или ссылку t.me. Можно несколько через пробел.")
             return
         handlers = {"sources": sources, "pending": pending, "platforms": platforms,
-                    "latest": latest, "top": top,
+                    "latest": latest, "top": top, "followed": followed,
                     "status": status, "check": check, "today": today, "discover": discover,
                     "stats": stats, "analytics": analytics, "insights": insights, "settings": settings}
         await handlers[action](message)
 
     @router.message()
     async def channel_list(message: Message):
-        raw = (message.text or "").strip()
-        pending = pending_input.pop(message.from_user.id, None) if message.from_user else None
-        if pending:
-            field, job_id = pending
-            saved = repo.set_job_note(job_id, raw) if field == "note" else repo.set_job_amount(job_id, raw)
-            await message.answer("Сохранено" if saved else "Заказ не найден")
+        if await cards.accept_input(message):
             return
+        raw = (message.text or "").strip()
         intent = channel_intent(raw)
         if intent:
             action, target = intent
@@ -641,6 +630,9 @@ def create_router(service) -> Router:
     async def callbacks(callback: CallbackQuery):
         parts = (callback.data or "").split(":")
         try:
+            if parts[0] in {"card", "feedback", "field", "plan", "draft"}:
+                await cards.handle(callback)
+                return
             if parts[0] == "demo":
                 from .demo_widget import handle_widget
                 await handle_widget(callback, repo)
@@ -668,7 +660,7 @@ def create_router(service) -> Router:
                 action = parts[1]
                 await callback.answer()
                 handlers = {"sources": sources, "pending": pending, "platforms": platforms, "latest": latest,
-                            "top": top,
+                            "top": top, "followed": followed,
                             "status": status, "check": check, "today": today,
                             "discover": discover, "stats": stats, "analytics": analytics,
                             "insights": insights, "settings": settings}
@@ -691,16 +683,6 @@ def create_router(service) -> Router:
             if len(parts) == 2 and parts[0] == "analytics" and parts[1] in {"7", "30", "all"}:
                 days = None if parts[1] == "all" else int(parts[1])
                 await callback.message.edit_text(analytics_text(days), reply_markup=analytics_keyboard())
-                await callback.answer()
-                return
-            if len(parts) == 3 and parts[0] == "field" and parts[1] in {"note", "amount"}:
-                job_id = int(parts[2])
-                if repo.job(job_id) is None:
-                    await callback.answer("Заказ не найден", show_alert=True)
-                    return
-                pending_input[callback.from_user.id] = (parts[1], job_id)
-                await callback.message.answer("Пришли заметку для заказа #" + str(job_id) if parts[1] == "note"
-                                              else "Пришли сумму и валюту для заказа #" + str(job_id))
                 await callback.answer()
                 return
             if len(parts) == 3 and parts[0] == "settings":
@@ -735,35 +717,6 @@ def create_router(service) -> Router:
                 examples = candidate.examples if candidate else []
                 await callback.message.answer("\n\n".join(examples)[:4000] or "Примеры не найдены")
                 await callback.answer()
-                return
-            if len(parts) == 3 and parts[0] == "feedback" and parts[1] in {*JOB_STATUS_LABELS, "new", "change"}:
-                job_id = int(parts[2])
-                job = repo.job(job_id)
-                if job is None:
-                    await callback.answer("Заказ не найден", show_alert=True)
-                    return
-                link = repo.job_link(job_id)
-                if parts[1] == "change":
-                    await callback.message.edit_reply_markup(reply_markup=job_keyboard(job_id, link, job.status, editing=True))
-                    await callback.answer()
-                    return
-                repo.add_feedback(job_id, parts[1])
-                job = repo.job(job_id)
-                analysis = repo.analysis(job_id)
-                await callback.message.edit_text(job_text(job, analysis, link)[:4000],
-                                                 reply_markup=job_keyboard(job_id, link, job.status))
-                await callback.answer("Решение сохранено")
-                return
-            if len(parts) == 2 and parts[0] in {"plan", "draft"}:
-                job_id = int(parts[1])
-                original = repo.job_original(job_id)
-                if original is None:
-                    await callback.answer("Заказ не найден", show_alert=True)
-                    return
-                await callback.answer("Готовлю ответ")
-                result = await service.ai.ask(parts[0], original)
-                text = "\n".join(result["plan"] + ["Вопросы:"] + result.get("questions", [])) if parts[0] == "plan" else result["draft"]
-                await callback.message.answer(text[:4000])
                 return
         except Exception:
             log.exception("Действие кнопки")

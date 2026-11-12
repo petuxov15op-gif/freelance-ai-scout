@@ -75,29 +75,29 @@ async def test_feedback_marks_card_and_allows_changing_decision(repo):
     job = repo.jobs()[0]
     callback_handler = create_router(service).callback_query.handlers[0].callback
     message = SimpleNamespace(edit_text=AsyncMock(), edit_reply_markup=AsyncMock())
-    callback = SimpleNamespace(message=message, answer=AsyncMock())
+    callback = SimpleNamespace(message=message, answer=AsyncMock(), from_user=SimpleNamespace(id=1))
 
     assert "Не подходит" in str(job_keyboard(job.id, None))
     callback.data = f"feedback:irrelevant:{job.id}"
     await callback_handler(callback)
     assert repo.job(job.id).status == "irrelevant"
-    assert message.edit_text.await_args.args[0].startswith(f"❌ Не подходит · Заказ #{job.id}")
-    assert "Изменить решение" in str(message.edit_text.await_args.kwargs["reply_markup"])
-    assert "feedback:irrelevant" not in str(message.edit_text.await_args.kwargs["reply_markup"])
+    assert "❌ Не подходит" in message.edit_text.await_args.args[0]
+    assert "Вернуть заказ" in str(message.edit_text.await_args.kwargs["reply_markup"])
+    assert "📌 Статус" in str(message.edit_text.await_args.kwargs["reply_markup"])
 
     callback.data = f"feedback:change:{job.id}"
     await callback_handler(callback)
-    assert "Снять отметку" in str(message.edit_reply_markup.await_args.kwargs["reply_markup"])
+    assert "Снять статус" in str(message.edit_text.await_args.kwargs["reply_markup"])
 
     callback.data = f"feedback:interesting:{job.id}"
     await callback_handler(callback)
     assert repo.job(job.id).status == "interesting"
-    assert message.edit_text.await_args.args[0].startswith(f"⭐ Интересно · Заказ #{job.id}")
+    assert "⭐ Интересно" in message.edit_text.await_args.args[0]
 
     callback.data = f"feedback:new:{job.id}"
     await callback_handler(callback)
     assert repo.job(job.id).status == "new"
-    assert message.edit_text.await_args.args[0].startswith(f"Заказ #{job.id}")
+    assert "🆕 Новый" in message.edit_text.await_args.args[0]
 
 
 @pytest.mark.asyncio

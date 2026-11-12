@@ -264,6 +264,16 @@ class Repository:
         with self.factory() as db:
             return list(db.scalars(select(Job).where(Job.score >= minimum_score).order_by(Job.created_at.desc()).limit(limit)))
 
+    def followed_jobs(self, limit: int = 20) -> list[Job]:
+        with self.factory() as db:
+            return list(db.scalars(select(Job).where(Job.saved.is_(True)).order_by(Job.created_at.desc()).limit(limit)))
+
+    def set_job_following(self, job_id: int, following: bool) -> None:
+        with transaction(self.factory) as db:
+            job = db.get(Job, job_id)
+            if job:
+                job.saved = following
+
     def pending_instant_jobs(self, minimum_score: int) -> list[Job]:
         started_at = datetime.fromisoformat(self.setting("instant_notifications_start_at"))
         with self.factory() as db:
