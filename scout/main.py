@@ -65,6 +65,8 @@ async def run() -> None:
     try:
         await source.start()
         if config.miniapp_enabled:
+            if config.miniapp_url:
+                repo.set_setting("miniapp_public_url", config.miniapp_url)
             web_runner = await start_web_server(service, config)
         try:
             await bot.set_my_commands(bot_commands())

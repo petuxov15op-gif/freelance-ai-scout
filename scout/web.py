@@ -64,7 +64,8 @@ def create_web_app(service, token: str, owner_id: int, public_url: str = "") -> 
                 if not header.startswith("tma "):
                     raise web.HTTPUnauthorized(text="Открой приложение из меню бота")
                 authenticated_owner(header[4:], token, owner_id)
-                if request.headers.get("Origin") and public_url and request.headers["Origin"] != public_url:
+                expected_origin = repo.setting("miniapp_public_url", public_url)
+                if request.headers.get("Origin") and expected_origin and request.headers["Origin"] != expected_origin:
                     raise web.HTTPForbidden(text="Недопустимый источник запроса")
             response = await handler(request)
         except web.HTTPException as exc:

@@ -92,6 +92,12 @@ async def test_other_owner_and_cross_origin_rejected(client, headers):
     assert response.status == 403
 
 
+async def test_origin_tracks_a_changed_quick_tunnel_without_polling_restart(client, headers, repo):
+    repo.set_setting("miniapp_public_url", "https://new-tunnel.trycloudflare.com")
+    assert (await client.get("/api/state", headers={**headers, "Origin": "https://scout.example"})).status == 403
+    assert (await client.get("/api/state", headers={**headers, "Origin": "https://new-tunnel.trycloudflare.com"})).status == 200
+
+
 async def test_empty_state_contains_no_demo_jobs_or_counts(client, headers):
     response = await client.get("/api/state", headers=headers)
     assert response.status == 200
