@@ -8,7 +8,7 @@ from pathlib import Path
 from zoneinfo import ZoneInfo
 
 from aiogram import Bot, Dispatcher
-from aiogram.types import MenuButtonCommands
+from aiogram.types import MenuButtonCommands, MenuButtonWebApp, WebAppInfo
 from alembic import command
 from alembic.config import Config as AlembicConfig
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
@@ -20,6 +20,7 @@ from .db import make_engine, make_session_factory
 from .repository import Repository
 from .service import ScoutService
 from .telegram import TelegramSource
+from .web import start_web_server
 
 
 async def run() -> None:
@@ -49,6 +50,7 @@ async def run() -> None:
     scheduler.add_job(service.monitor, "interval", minutes=10, id="monitor", max_instances=1, coalesce=True)
     initial_monitor = None
     discovery_task = None
+    web_runner = None
 
     async def discovery_loop() -> None:
         while True:
@@ -62,9 +64,13 @@ async def run() -> None:
 
     try:
         await source.start()
+        if config.miniapp_enabled:
+            web_runner = await start_web_server(service, config)
         try:
             await bot.set_my_commands(bot_commands())
-            await bot.set_chat_menu_button(chat_id=config.owner_id, menu_button=MenuButtonCommands())
+            menu = (MenuButtonWebApp(text="Открыть Scout", web_app=WebAppInfo(url=config.miniapp_url))
+                    if config.miniapp_enabled and config.miniapp_url else MenuButtonCommands())
+            await bot.set_chat_menu_button(chat_id=config.owner_id, menu_button=menu)
         except Exception:
             logging.exception("Не удалось обновить меню бота")
         scheduler.start()
@@ -74,6 +80,8 @@ async def run() -> None:
             discovery_task = asyncio.create_task(discovery_loop())
         await dispatcher.start_polling(bot, handle_signals=True)
     finally:
+        if web_runner:
+            await web_runner.cleanup()
         for task in (initial_monitor, discovery_task):
             if task:
                 task.cancel()

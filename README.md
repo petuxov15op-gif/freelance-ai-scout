@@ -83,9 +83,12 @@ Send `/start` to show the four-button menu: **Jobs**, **Channels**, **Add channe
 
 The owner-selected dark interface is in [`miniapp/`](miniapp/README.md). Open
 `miniapp/index.html` for the mobile overview, job card, reply draft, and channel
-controls. It is a browser-only demo: sample data and local interactions are not
-connected to the bot or database. Telegram authentication, a backend API, and
-HTTPS deployment are still required for a production Mini App.
+controls. Outside Telegram it shows an explicitly labeled browser-only demo.
+The optional aiohttp server uses Telegram-signed, owner-only authentication to
+connect the interface to the bot's existing database and services. Enable it with
+`MINIAPP_ENABLED=true`; it listens on `127.0.0.1:8080` by default, in the same
+process as the bot. Set `MINIAPP_URL` to a public HTTPS origin to configure the
+owner's Telegram menu button. Hosting or a tunnel must be configured separately.
 
 ## Tests
 

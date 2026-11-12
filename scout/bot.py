@@ -192,7 +192,9 @@ async def health_text(service) -> str:
         problems.append(f"Сессия Telegram: ошибка {type(exc).__name__}")
 
     started = service.last_monitor_started
-    if started is None:
+    if service.repo.setting("monitoring_paused", "false") == "true":
+        lines.append("Мониторинг: на паузе по решению владельца")
+    elif started is None:
         lines.append("Мониторинг: после запуска ещё не выполнялся")
         problems.append("Мониторинг ещё не запускался")
     else:
@@ -404,12 +406,13 @@ def create_router(service) -> Router:
     @router.message(Command("status"))
     async def status(message: Message):
         stats = repo.stats()
+        monitoring = "на паузе" if repo.setting("monitoring_paused", "false") == "true" else "каждые 10 минут"
         telegram_status = "подключён" if service.source.client.is_connected() else "отключён"
         provider_status = (f"OpenRouter: {service.ai.last_status}, модель {service.ai.model}, учтено сегодня ${repo.cost_today():.4f}"
                            if service.ai.provider == "openrouter" else
                            f"Сторонний API: {service.ai.last_status}, модель {service.ai.model}; остаток и расходы смотри у продавца")
         await message.answer(f"Источники: {stats['approved']} · кандидаты: {stats['pending']}\n"
-                             "Поиск новых чатов: по бесплатному лимиту Telegram\nМониторинг: каждые 10 минут\n"
+                             f"Поиск новых чатов: по бесплатному лимиту Telegram\nМониторинг: {monitoring}\n"
                              "Присылаю: разовые IT-заказы и IT-работу/подработку с явным вайбкодингом\n"
                              "Уведомления: без порога рейтинга\n"
                              f"{provider_status}\n"

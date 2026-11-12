@@ -3,6 +3,7 @@ WORKDIR /app
 ENV PYTHONDONTWRITEBYTECODE=1 PYTHONUNBUFFERED=1
 COPY pyproject.toml ./
 COPY scout ./scout
+COPY miniapp ./miniapp
 COPY migrations ./migrations
 COPY alembic.ini ./
 RUN pip install --no-cache-dir .

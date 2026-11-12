@@ -3,6 +3,7 @@ from __future__ import annotations
 import os
 from dataclasses import dataclass
 from pathlib import Path
+from urllib.parse import urlsplit
 
 
 def load_dotenv(path: str = ".env") -> None:
@@ -37,6 +38,10 @@ class Config:
     ai_concurrency: int
     discovery_enabled: bool
     log_level: str
+    miniapp_enabled: bool = False
+    miniapp_url: str = ""
+    miniapp_host: str = "127.0.0.1"
+    miniapp_port: int = 8080
 
     @classmethod
     def from_env(cls) -> "Config":
@@ -52,6 +57,16 @@ class Config:
         base_url = os.getenv("ALTERNATE_API_BASE_URL", "").rstrip("/")
         if provider == "compatible" and not base_url.startswith("https://"):
             raise ValueError("ALTERNATE_API_BASE_URL должен начинаться с https://")
+        miniapp_enabled = os.getenv("MINIAPP_ENABLED", "false").strip().lower() in {"1", "true", "yes"}
+        miniapp_url = os.getenv("MINIAPP_URL", "").strip().rstrip("/")
+        if miniapp_url:
+            address = urlsplit(miniapp_url)
+            if (address.scheme != "https" or not address.hostname or address.username or address.password
+                    or address.path or address.query or address.fragment):
+                raise ValueError("MINIAPP_URL: нужен HTTPS-адрес без пути, параметров и учётных данных")
+        miniapp_port = int(os.getenv("MINIAPP_PORT", "8080"))
+        if not 1 <= miniapp_port <= 65535:
+            raise ValueError("MINIAPP_PORT должен быть от 1 до 65535")
         return cls(
             ai_provider=provider,
             alternate_api_key=os.getenv("ALTERNATE_API_KEY", ""),
@@ -72,4 +87,8 @@ class Config:
             ai_concurrency=max(1, int(os.getenv("AI_CONCURRENCY", "2"))),
             discovery_enabled=os.getenv("DISCOVERY_ENABLED", "true").strip().lower() in {"1", "true", "yes"},
             log_level=os.getenv("LOG_LEVEL", "INFO"),
+            miniapp_enabled=miniapp_enabled,
+            miniapp_url=miniapp_url,
+            miniapp_host=os.getenv("MINIAPP_HOST", "127.0.0.1"),
+            miniapp_port=miniapp_port,
         )

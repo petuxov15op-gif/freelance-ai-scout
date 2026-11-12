@@ -8,9 +8,17 @@
   <title>Freelance AI Scout — Mini App</title>
   <link rel="icon" href="data:,">
   <link rel="stylesheet" href="styles.css">
+  <script src="https://telegram.org/js/telegram-web-app.js?65"></script>
   <script src="app.js" defer></script>
+  <script src="live.js" defer></script>
 </head>
-<body>
+<body data-mode="loading">
+  <section class="connection-panel" id="connection-panel" aria-live="polite">
+    <span class="eyebrow">FREELANCE AI SCOUT</span>
+    <h1 id="connection-title">Открываем Scout.</h1>
+    <p id="connection-description">Подключаем интерфейс…</p>
+    <button class="primary-button" id="retry-connection" type="button" hidden>Попробовать снова</button>
+  </section>
   <svg class="icon-defs" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
     <symbol id="i-spark" viewBox="0 0 24 24"><path d="m12 2 1.8 8.2L22 12l-8.2 1.8L12 22l-1.8-8.2L2 12l8.2-1.8L12 2Z"/></symbol>
     <symbol id="i-arrow" viewBox="0 0 24 24"><path d="M5 12h14m-6-6 6 6-6 6"/></symbol>

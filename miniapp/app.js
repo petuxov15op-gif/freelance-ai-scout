@@ -1,5 +1,14 @@
 'use strict';
 
+window.scoutLive = Boolean(window.Telegram?.WebApp?.initData)
+  || new URLSearchParams(location.search).get('live') === '1'
+  || /tgWebAppData=/.test(location.hash);
+
+(() => {
+if (window.scoutLive) return;
+document.body.dataset.mode = 'demo';
+document.getElementById('connection-panel').hidden = true;
+
 // Browser-only demo. No Bot API, user session, server writes, or client messages.
 const initialChannels = [
   { id: 1, name: '@briefs_daily', caption: 'Проекты по разработке', enabled: true },
@@ -255,3 +264,4 @@ $('#reset-demo').addEventListener('click', () => {
 showScreen();
 setPeriod('day');
 renderChannels();
+})();

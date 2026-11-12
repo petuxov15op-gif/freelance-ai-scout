@@ -20,6 +20,10 @@
 [hidden] { display: none !important; }
 body { margin: 0; background: var(--bg); color: var(--text); font: 16px/1.5 var(--font); -webkit-font-smoothing: antialiased; }
 button, input, textarea { font: inherit; }
+button:disabled { cursor: wait; opacity: .55; }
+body[data-mode=loading] .app-shell, body[data-mode=error] .app-shell { display: none; }
+.connection-panel { max-width: 500px; margin: 50px auto; padding: 24px; }
+.connection-panel p { color: var(--muted); }
 button, a { -webkit-tap-highlight-color: transparent; }
 button { cursor: pointer; }
 button, a { transition: background .16s, opacity .12s; }
@@ -30,7 +34,7 @@ a { color: inherit; }
 .icon { width: 20px; height: 20px; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; flex: none; }
 .icon-sm { width: 16px; height: 16px; }
 .app-shell { width: 100%; max-width: 540px; min-height: 100dvh; margin: 0 auto; }
-.app-header { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: max(22px, env(safe-area-inset-top)) 22px 20px; border-bottom: 1px solid var(--line-soft); }
+.app-header { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: calc(max(22px, env(safe-area-inset-top), var(--tg-safe-area-inset-top, 0px)) + var(--tg-content-safe-area-inset-top, 0px)) 22px 20px; border-bottom: 1px solid var(--line-soft); }
 .brand { display: flex; align-items: center; gap: 12px; font-size: 14px; letter-spacing: -.02em; }
 .brand strong { font-weight: 650; }
 .brand-mark { position: relative; width: 24px; height: 24px; display: block; transform: rotate(-20deg); flex: none; }
@@ -91,6 +95,19 @@ h2 { font-size: 15px; font-weight: 600; line-height: 1.4; margin: 0; }
 .quiet-button:hover, .outline-button:hover { background: #33323b; }
 .demo-note, .draft-note { color: var(--subtle); font-size: 11px; line-height: 1.6; margin: 18px 0 0; }
 .bot-bubble { background: #212127; border: 1px solid #383840; border-radius: 15px 15px 15px 5px; padding: 20px 18px 16px; }
+.bot-bubble + .bot-bubble { margin-top: 18px; }
+.live-status-label { color: var(--accent); font-size: 12px; margin: 10px 0; }
+.live-description { white-space: pre-wrap; overflow-wrap: anywhere; }
+.live-status { display: block; color: var(--muted); font-size: 12px; margin-top: 18px; }
+.live-status select { display: block; width: 100%; background: var(--surface-3); color: var(--text); border: 1px solid #82798d; border-radius: 8px; padding: 10px; margin-top: 8px; font-size: 16px; min-height: 44px; }
+.live-details { font-size: 13px; line-height: 1.6; color: var(--muted); overflow-wrap: anywhere; }
+.live-details summary { cursor: pointer; min-height: 44px; padding-top: 12px; color: var(--accent); }
+.live-candidate { background: var(--surface-2); border: 1px solid var(--line); border-radius: 12px; padding: 16px; margin-top: 12px; overflow-wrap: anywhere; }
+.live-candidate h3 { font-size: 16px; margin: 4px 0 10px; }
+.live-candidate p { color: var(--muted); font-size: 13px; }
+.live-candidate .order-actions .primary-button { grid-column: auto; }
+.live-candidate pre { font: 13px/1.6 var(--font); white-space: pre-wrap; color: var(--muted); }
+.live-empty { color: var(--muted); font-size: 14px; padding: 18px 0; }
 .message-kicker { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; font: 10px var(--mono); letter-spacing: .06em; color: var(--sage); }
 .signal-dot { width: 6px; height: 6px; border-radius: 50%; background: var(--sage); box-shadow: 0 0 0 3px #a8c4ad19; flex: none; }
 .message-time { margin-left: auto; color: var(--subtle); }

@@ -364,7 +364,7 @@ class ScoutService:
             return await finish("done", datetime.now(timezone.utc) + timedelta(hours=1))
 
     async def monitor(self) -> None:
-        if self.monitor_lock.locked():
+        if self.monitor_lock.locked() or self.repo.setting("monitoring_paused", "false") == "true":
             return
         async with self.monitor_lock:
             self.last_monitor_started = datetime.now(timezone.utc)
@@ -374,6 +374,8 @@ class ScoutService:
                 channels = [channel for channel in channels if not self.source_paused(channel)]
                 log.info("Мониторинг начат: одобренных каналов %s", len(channels))
                 for channel in channels:
+                    if self.repo.setting("monitoring_paused", "false") == "true":
+                        break
                     try:
                         async for item in self.source.messages(channel, self.repo.cursor(channel.id)):
                             self._save_item(channel, item)
@@ -381,7 +383,8 @@ class ScoutService:
                     except Exception as exc:
                         self.last_monitor_errors.append(f"@{channel.username or channel.id}: {type(exc).__name__}")
                         log.exception("Мониторинг канала %s прерван, курсор сохранён", channel.title)
-                await self.process_pending()
+                if self.repo.setting("monitoring_paused", "false") != "true":
+                    await self.process_pending()
                 log.info("Мониторинг завершён: одобренных каналов %s", len(channels))
             except Exception as exc:
                 self.last_monitor_errors.append(f"Общий сбой: {type(exc).__name__}")
