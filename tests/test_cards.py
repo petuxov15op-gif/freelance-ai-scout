@@ -1,16 +1,14 @@
 from datetime import datetime, timezone
 from html import unescape
 import re
-from io import BytesIO
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
 import pytest
 from aiogram.exceptions import TelegramBadRequest
-from PIL import Image
 
 from scout.bot import OwnerMiddleware, create_router
-from scout.cards import OrderCards, budget_text, card_keyboard, card_media, detail_text
+from scout.cards import OrderCards, card_keyboard, card_text
 from scout.repository import Repository
 from scout.service import ScoutService
 
@@ -39,20 +37,20 @@ def card_service(repo):
 
 def callback(job, data):
     return SimpleNamespace(data=data.format(id=job.id), from_user=SimpleNamespace(id=1), answer=AsyncMock(),
-                           message=SimpleNamespace(text="", edit_media=AsyncMock(), answer=AsyncMock(), answer_document=AsyncMock()))
+                           message=SimpleNamespace(text="", edit_text=AsyncMock(), answer=AsyncMock()))
 
 
 @pytest.mark.asyncio
 async def test_notification_uses_full_card_once_and_keeps_delivery_guard(repo, job):
-    bot = SimpleNamespace(send_photo=AsyncMock(return_value=SimpleNamespace(message_id=42)))
+    bot = SimpleNamespace(send_message=AsyncMock(return_value=SimpleNamespace(message_id=42)))
     service = ScoutService(repo, SimpleNamespace(), SimpleNamespace(), bot, 1)
     await service.notify_job(job.id, "instant")
     await service.notify_job(job.id, "instant")
-    bot.send_photo.assert_awaited_once()
-    sent = bot.send_photo.await_args
+    bot.send_message.assert_awaited_once()
+    sent = bot.send_message.await_args
     assert sent.kwargs["parse_mode"] == "HTML"
-    assert sent.args[1].data.startswith(bytes.fromhex("89504e470d0a1a0a"))
-    assert f"Заказ #{job.id}" in sent.kwargs["caption"]
+    assert "30 000 ₽" in sent.args[1] and "1 неделя" in sent.args[1] and "83/100" in sent.args[1]
+    assert "&lt;WordPress&gt;" in sent.args[1]
     rows = sent.kwargs["reply_markup"].inline_keyboard
     assert [len(row) for row in rows] == [1, 2, 2, 2]
     assert rows[2][0].url == "https://t.me/card_jobs/55"
@@ -69,7 +67,7 @@ async def test_following_survives_status_change_restart_and_can_be_stopped(repo,
     tap.data = f"feedback:applied:{job.id}"
     await cards.handle(tap)
     assert repo.job(job.id).status == "applied" and repo.job(job.id).saved
-    assert "Откликнулся" in tap.message.edit_media.await_args.kwargs["media"].caption
+    assert "Откликнулся" in tap.message.edit_text.await_args.args[0]
     reopened_repo = Repository(repo.factory)
     assert reopened_repo.followed_jobs()[0].id == job.id
     tap.data = f"card:unfollow:{job.id}"
@@ -85,7 +83,7 @@ async def test_reject_removes_following_and_can_restore(repo, job):
     tap = callback(job, "feedback:irrelevant:{id}")
     await cards.handle(tap)
     assert repo.job(job.id).status == "irrelevant" and not repo.job(job.id).saved
-    assert "Вернуть заказ" in str(tap.message.edit_media.await_args.kwargs["reply_markup"])
+    assert "Вернуть заказ" in str(tap.message.edit_text.await_args.kwargs["reply_markup"])
     tap.data = f"card:follow:{job.id}"
     await cards.handle(tap)
     assert repo.job(job.id).status == "new" and repo.job(job.id).saved
@@ -97,11 +95,11 @@ async def test_input_updates_same_message_and_cancel_does_not_save(repo, job, fi
     cards = OrderCards(card_service(repo))
     tap = callback(job, "field:" + field + ":{id}")
     await cards.handle(tap)
-    assert "следующим сообщением" in tap.message.edit_media.await_args.kwargs["media"].caption
+    assert "следующим сообщением" in tap.message.edit_text.await_args.args[0]
     user = SimpleNamespace(from_user=SimpleNamespace(id=1), text=value, answer=AsyncMock())
     assert await cards.accept_input(user)
     assert getattr(repo.job(job.id), field) == value
-    assert "✓ Изменения сохранены" in tap.message.edit_media.await_args.kwargs["media"].caption
+    assert "✓ Изменения сохранены" in tap.message.edit_text.await_args.args[0]
     tap.message.answer.assert_not_awaited()
     await cards.handle(tap)
     tap.data = f"card:cancel:{job.id}"
@@ -124,12 +122,12 @@ async def test_draft_generation_cached_owner_edit_reused_and_plan_stays_in_card(
     assert await cards.accept_input(user)
     tap.data = f"draft:{job.id}"
     await OrderCards(service).handle(tap)
-    assert "Мой исправленный отклик" in tap.message.edit_media.await_args.kwargs["media"].caption
+    assert "Мой исправленный отклик" in tap.message.edit_text.await_args.args[0]
     assert service.ai.ask.await_count == 1
     tap.data = f"plan:{job.id}"
     await cards.handle(tap)
-    assert "Проверить макет" in tap.message.edit_media.await_args.kwargs["media"].caption
-    assert "Какие поля формы" in tap.message.edit_media.await_args.kwargs["media"].caption
+    assert "Проверить макет" in tap.message.edit_text.await_args.args[0]
+    assert "Какие поля формы" in tap.message.edit_text.await_args.args[0]
     tap.message.answer.assert_not_awaited()
 
 
@@ -140,8 +138,8 @@ async def test_ai_error_keeps_other_buttons_and_retry_available(repo, job):
     tap = callback(job, "draft:{id}")
     cards = OrderCards(service)
     await cards.handle(tap)
-    assert "Не удалось получить ответ ИИ" in tap.message.edit_media.await_args.kwargs["media"].caption
-    assert "Отслеживать заказ" in str(tap.message.edit_media.await_args.kwargs["reply_markup"])
+    assert "Не удалось получить ответ ИИ" in tap.message.edit_text.await_args.args[0]
+    assert "Отслеживать заказ" in str(tap.message.edit_text.await_args.kwargs["reply_markup"])
     assert not cards.generating and repo.analysis(job.id, "draft_saved") is None
 
 
@@ -153,47 +151,23 @@ async def test_overlong_input_is_not_saved_and_old_callback_can_be_repeated(repo
     user = SimpleNamespace(from_user=SimpleNamespace(id=1), text="x" * 1001, answer=AsyncMock())
     assert await cards.accept_input(user)
     assert not repo.job(job.id).note and 1 in cards.pending
-    tap.message.edit_media.side_effect = TelegramBadRequest(method="editMessageText", message="message is not modified")
+    tap.message.edit_text.side_effect = TelegramBadRequest(method="editMessageText", message="message is not modified")
     await cards.show(tap.message, job.id)
 
 
-@pytest.mark.asyncio
-@pytest.mark.parametrize("body", ["<script>&" * 2000, "🎯" * 2000])
-async def test_caption_is_bounded_and_full_draft_file_preserves_large_text(repo, job, body):
-    repo.save_analysis(job.id, "draft_saved", "owner", {"draft": body})
-    media = await card_media(repo, job.id, "draft", sample=True)
-    text = media.caption
-    assert "<script>" not in text
-    if body.startswith("<script>"):
-        assert "&lt;script&gt;" in text
-    assert "🧪" in text and "Показан фрагмент" in text
-    assert len(unescape(re.sub(r"<[^>]+>", "", text)).encode("utf-16-le")) // 2 <= 1024
-    cards = OrderCards(card_service(repo))
-    tap = callback(job, "card:file_draft:{id}")
-    await cards.handle(tap)
-    sent = tap.message.answer_document.await_args.args[0]
-    assert sent.data.decode("utf-8") == body
+def test_html_is_valid_and_bounded_even_with_large_analysis(repo, job):
+    repo.save_analysis(job.id, "draft_saved", "owner", {"draft": "<script>&" * 2000})
+    text = card_text(repo, job.id, "draft", sample=True)
+    assert "<script>" not in text and "&lt;script&gt;" in text
+    assert "🧪" in text and "не новый заказ" in text
+    assert len(unescape(re.sub(r"<[^>]+>", "", text))) < 4096
 
 
 @pytest.mark.parametrize("budget,currency", [("30 000 ₽", "₽"), ("30 000 ₽", "RUB"), ("30 000 руб", "₽")])
 def test_budget_does_not_duplicate_currency(repo, job, budget, currency):
     data = dict(repo.analysis(job.id).result, budget=budget, currency=currency)
     repo.save_analysis(job.id, "deep", "test", data)
-    assert budget_text(data) == budget
-
-
-@pytest.mark.asyncio
-async def test_state_change_updates_graphic_and_keeps_real_buttons(repo, job):
-    before = await card_media(repo, job.id)
-    repo.set_job_following(job.id, True)
-    after = await card_media(repo, job.id)
-    assert before.media.data != after.media.data
-    image = Image.open(BytesIO(after.media.data))
-    assert image.width == 1080 and 600 <= image.height <= 1300
-    assert image.getpixel((500, 100)) != image.getpixel((500, 200))
-    keyboard = card_keyboard(job.id, repo.job_link(job.id), following=True)
-    assert keyboard.inline_keyboard[0][0].style == "primary"
-    assert keyboard.inline_keyboard[0][0].callback_data == f"card:unfollow:{job.id}"
+    assert f"<b>{budget}</b>" in card_text(repo, job.id)
 
 
 @pytest.mark.asyncio
@@ -206,7 +180,7 @@ async def test_followed_list_opens_card_via_existing_router(repo, job):
     assert message.answer.await_args.kwargs["reply_markup"].inline_keyboard[0][0].callback_data == f"card:home:{job.id}"
     tap = callback(job, "card:home:{id}")
     await router.callback_query.handlers[0].callback(tap)
-    assert tap.message.edit_media.await_args.kwargs["media"].media.data.startswith(bytes.fromhex("89504e470d0a1a0a"))
+    assert "Лендинг &lt;WordPress&gt;" in tap.message.edit_text.await_args.args[0]
 
 
 @pytest.mark.asyncio
