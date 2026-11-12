@@ -30,12 +30,14 @@ def test_env_append_and_duplicate_keys(tmp_path):
     assert env.read_text().splitlines() == ["MINIAPP_URL=" + url] * 2
 
 
-async def test_menu_publication_does_not_poll_or_send_messages(repo, monkeypatch, tmp_path):
+@pytest.mark.parametrize("telegram_suffix", ["", "/"])
+async def test_menu_publication_does_not_poll_or_send_messages(repo, monkeypatch, tmp_path, telegram_suffix):
     url = "https://one-two-three.trycloudflare.com"
     bot = SimpleNamespace(set_chat_menu_button=AsyncMock(),
-                          get_chat_menu_button=AsyncMock(return_value=SimpleNamespace(web_app=SimpleNamespace(url=url))),
+                          get_chat_menu_button=AsyncMock(return_value=SimpleNamespace(web_app=SimpleNamespace(url=url + telegram_suffix))),
                           session=SimpleNamespace(close=AsyncMock()))
     monkeypatch.setattr("scout.local_tunnel.Bot", lambda token: bot)
+    monkeypatch.setattr("scout.local_tunnel.verify_public_url", AsyncMock())
     saved = []
     monkeypatch.setattr("scout.local_tunnel.save_public_url", saved.append)
     monkeypatch.setattr("scout.local_tunnel.make_engine", lambda url: SimpleNamespace(dispose=lambda: None))
@@ -46,3 +48,13 @@ async def test_menu_publication_does_not_poll_or_send_messages(repo, monkeypatch
     bot.set_chat_menu_button.assert_awaited_once()
     assert bot.set_chat_menu_button.await_args.kwargs["chat_id"] == 42
     bot.session.close.assert_awaited_once()
+
+
+async def test_failed_public_check_does_not_change_menu_or_database(repo, monkeypatch):
+    monkeypatch.setattr("scout.local_tunnel.verify_public_url", AsyncMock(side_effect=RuntimeError("not ready")))
+    save = AsyncMock()
+    monkeypatch.setattr("scout.local_tunnel.Bot", save)
+    with pytest.raises(RuntimeError, match="not ready"):
+        await publish("https://one-two-three.trycloudflare.com", SimpleNamespace())
+    save.assert_not_called()
+    assert repo.setting("miniapp_public_url") == ""

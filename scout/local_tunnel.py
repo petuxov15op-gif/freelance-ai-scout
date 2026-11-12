@@ -16,6 +16,7 @@ from pathlib import Path
 
 from aiogram import Bot
 from aiogram.types import MenuButtonWebApp, WebAppInfo
+import httpx
 
 from .config import Config
 from .db import make_engine, make_session_factory
@@ -47,6 +48,8 @@ def save_public_url(url: str, path: Path = Path(".env")) -> None:
 
 
 async def publish(url: str, config: Config) -> None:
+    # An allocated hostname is not proof of a working tunnel.
+    await verify_public_url(url)
     # The shared SQLite setting updates API origin checks without restarting polling.
     engine = make_engine(config.database_url)
     try:
@@ -62,7 +65,8 @@ async def publish(url: str, config: Config) -> None:
                         menu_button=MenuButtonWebApp(text="Открыть Scout", web_app=WebAppInfo(url=url)),
                     )
                     menu = await bot.get_chat_menu_button(chat_id=config.owner_id)
-                    if getattr(getattr(menu, "web_app", None), "url", None) != url:
+                    returned_url = getattr(getattr(menu, "web_app", None), "url", "")
+                    if returned_url.rstrip("/") != url.rstrip("/"):
                         raise RuntimeError("Menu readback did not match")
                     log.info("Кнопка Mini App обновлена: %s", url)
                     return
@@ -78,6 +82,21 @@ async def publish(url: str, config: Config) -> None:
         engine.dispose()
 
 
+async def verify_public_url(url: str) -> None:
+    async with httpx.AsyncClient(timeout=10, follow_redirects=False) as client:
+        for attempt in range(12):
+            try:
+                page = await client.get(url + "/")
+                protected = await client.get(url + "/api/state")
+                if page.status_code == 200 and "Freelance AI Scout" in page.text and protected.status_code == 401:
+                    return
+            except httpx.HTTPError:
+                pass
+            if attempt < 11:
+                await asyncio.sleep(3)
+    raise RuntimeError("Public tunnel is not ready; Telegram menu was not changed")
+
+
 async def run() -> None:
     config = Config.from_env()
     if not config.miniapp_enabled or config.miniapp_host != "127.0.0.1":
@@ -88,8 +107,13 @@ async def run() -> None:
     # Do not give an external binary the Telegram or AI credentials loaded by Config.
     child_env = {key: value for key, value in os.environ.items()
                  if key in {"PATH", "HOME", "TMPDIR", "LANG", "LC_ALL"}}
+    diagnostic_log = Path("data/cloudflared.log").resolve()
+    diagnostic_log.parent.mkdir(parents=True, exist_ok=True)
+    diagnostic_log.touch(mode=0o600, exist_ok=True)
+    diagnostic_log.chmod(0o600)
     process = await asyncio.create_subprocess_exec(
         str(binary), "tunnel", "--no-autoupdate", "--protocol", "http2",
+        "--logfile", str(diagnostic_log),
         "--url", f"http://127.0.0.1:{config.miniapp_port}",
         stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.STDOUT, env=child_env,
     )
@@ -103,8 +127,10 @@ async def run() -> None:
             match = TUNNEL_URL.search(text)
             if match and match[0] != announced:
                 announced = match[0]
-                await publish(announced, config)
+                log.info("Временный адрес выдан; ожидаем соединения с Cloudflare")
             elif "Registered tunnel connection" in text:
+                if announced:
+                    await publish(announced, config)
                 log.info("HTTPS-туннель подключён")
             elif " ERR " in text:
                 log.warning("Туннель сообщает об ошибке соединения")
@@ -119,13 +145,20 @@ async def run() -> None:
                 await process.wait()
 
 
+async def supervise() -> None:
+    while True:
+        try:
+            await run()
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            log.error("Туннель остановлен: %s; повтор через 15 секунд", type(exc).__name__)
+            await asyncio.sleep(15)
+
+
 if __name__ == "__main__":
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
-    # aiohttp/aiogram debug logging must not disclose token-bearing request URLs.
     try:
-        asyncio.run(run())
+        asyncio.run(supervise())
     except (KeyboardInterrupt, asyncio.CancelledError):
         pass
-    except Exception as exc:
-        log.error("Туннель остановлен: %s", type(exc).__name__)
-        sys.exit(1)

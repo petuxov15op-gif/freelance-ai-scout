@@ -72,6 +72,10 @@
     $('.status-panel').classList.toggle('is-paused', monitoring.paused);
     $('#status-title').textContent = monitoring.paused ? 'Проверка каналов на паузе' : monitoring.running ? 'Проверяю каналы' : monitoring.errors ? 'Есть ошибки проверки' : monitoring.last_finished ? 'Проверка каналов включена' : 'Ожидаю первую проверку';
     $('#status-subtitle').textContent = monitoring.paused && monitoring.running ? 'Текущая операция завершится' : monitoring.last_finished ? `Последняя: ${new Date(monitoring.last_finished).toLocaleString('ru-RU', { timeZone: 'Asia/Yekaterinburg', day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' })} · Екб` : 'Интервал — 10 минут';
+    if (state.telegram_reader && !state.telegram_reader.ready) {
+      $('#status-title').textContent = 'Чтение Telegram не подключено';
+      $('#status-subtitle').textContent = state.telegram_reader.error || 'Сохранённые заказы доступны';
+    }
     $('#status-channel-count').textContent = `${active} из ${monitored}`;
     $('#toggle-monitor span').textContent = monitoring.paused ? 'Возобновить проверку' : 'Поставить на паузу';
     $('#toggle-monitor').setAttribute('aria-pressed', String(monitoring.paused));

@@ -58,9 +58,8 @@ class TelegramSource:
         await self.client.connect()
         if await self.client.is_user_authorized():
             return
-        if not self.phone:
-            raise RuntimeError("Telegram-сессия не создана. Выполните первый вход: python -m scout.auth")
-        await self.client.start(phone=self.phone)
+        # A background reader must never trigger interactive login or SMS retries.
+        raise RuntimeError("Telegram-сессия не подтверждена. Проверьте подключение или выполните вход: python -m scout.auth")
 
     async def close(self) -> None:
         await self.client.disconnect()

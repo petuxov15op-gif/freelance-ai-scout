@@ -170,6 +170,8 @@ def create_web_app(service, token: str, owner_id: int, public_url: str = "") -> 
                            "last_started": iso(service.last_monitor_started),
                            "last_finished": iso(service.last_monitor_finished),
                            "errors": len(service.last_monitor_errors)},
+            "telegram_reader": {"ready": getattr(service, "source_ready", True),
+                                "error": getattr(service, "source_error", "")},
             "statistics": {"found": sum(bars), "matched": analytics["unique"],
                            "applied": analytics["applied"], "bars": bars},
             "channels": [channel_data(c) for c in channels], "jobs": jobs_page(),

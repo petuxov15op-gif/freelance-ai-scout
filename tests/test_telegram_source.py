@@ -67,6 +67,16 @@ async def test_missing_session_gives_setup_instruction(tmp_path):
 
 
 @pytest.mark.asyncio
+async def test_background_reader_never_starts_interactive_login(tmp_path):
+    source = TelegramSource(12345, "fake-hash", str(tmp_path / "session"), phone="test-phone")
+    source.client = AsyncMock()
+    source.client.is_user_authorized.return_value = False
+    with pytest.raises(RuntimeError, match="python -m scout.auth"):
+        await source.start()
+    source.client.start.assert_not_awaited()
+
+
+@pytest.mark.asyncio
 async def test_resolve_uses_cached_peer_instead_of_resolving_username_again(tmp_path):
     source = TelegramSource(12345, "fake-hash", str(tmp_path / "session"))
     source.client = AsyncMock()

@@ -51,6 +51,9 @@ async def run() -> None:
     initial_monitor = None
     discovery_task = None
     web_runner = None
+    reader_task = None
+    service.source_ready = False
+    service.source_error = "Подключаем чтение Telegram"
 
     async def discovery_loop() -> None:
         while True:
@@ -62,8 +65,31 @@ async def run() -> None:
                 delay = 3600
             await asyncio.sleep(delay)
 
+    async def initialize_reader() -> None:
+        nonlocal initial_monitor, discovery_task
+        while True:
+            try:
+                await asyncio.wait_for(source.start(), timeout=30)
+                break
+            except RuntimeError:
+                service.source_error = "Не удалось подтвердить сессию чтения Telegram; проверь подключение и вход"
+                logging.warning("Сессия чтения Telegram не подтверждена; повтор через минуту, без автоматического входа")
+                await source.close()
+                await asyncio.sleep(60)
+            except Exception as exc:
+                service.source_error = "Чтение Telegram временно недоступно; повтор через минуту"
+                logging.warning("Подключение чтения Telegram: %s; повтор через минуту", type(exc).__name__)
+                await source.close()
+                await asyncio.sleep(60)
+        service.source_ready = True
+        service.source_error = ""
+        scheduler.start()
+        initial_monitor = asyncio.create_task(service.monitor())
+        if config.discovery_enabled:
+            discovery_task = asyncio.create_task(discovery_loop())
+        logging.info("Мониторинг каждые 10 минут; автоматический поиск чатов: %s", config.discovery_enabled)
+
     try:
-        await source.start()
         if config.miniapp_enabled:
             if config.miniapp_url:
                 repo.set_setting("miniapp_public_url", config.miniapp_url)
@@ -75,16 +101,12 @@ async def run() -> None:
             await bot.set_chat_menu_button(chat_id=config.owner_id, menu_button=menu)
         except Exception:
             logging.exception("Не удалось обновить меню бота")
-        scheduler.start()
-        logging.info("Мониторинг каждые 10 минут; автоматический поиск чатов: %s", config.discovery_enabled)
-        initial_monitor = asyncio.create_task(service.monitor())
-        if config.discovery_enabled:
-            discovery_task = asyncio.create_task(discovery_loop())
+        reader_task = asyncio.create_task(initialize_reader())
         await dispatcher.start_polling(bot, handle_signals=True)
     finally:
         if web_runner:
             await web_runner.cleanup()
-        for task in (initial_monitor, discovery_task):
+        for task in (reader_task, initial_monitor, discovery_task):
             if task:
                 task.cancel()
                 with suppress(asyncio.CancelledError):
