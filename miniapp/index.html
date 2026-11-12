@@ -1,0 +1,112 @@
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="theme-color" content="#111115">
+  <meta name="color-scheme" content="dark">
+  <title>Freelance AI Scout — Mini App</title>
+  <link rel="icon" href="data:,">
+  <link rel="stylesheet" href="styles.css">
+  <script src="app.js" defer></script>
+</head>
+<body>
+  <svg class="icon-defs" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
+    <symbol id="i-spark" viewBox="0 0 24 24"><path d="m12 2 1.8 8.2L22 12l-8.2 1.8L12 22l-1.8-8.2L2 12l8.2-1.8L12 2Z"/></symbol>
+    <symbol id="i-arrow" viewBox="0 0 24 24"><path d="M5 12h14m-6-6 6 6-6 6"/></symbol>
+    <symbol id="i-external" viewBox="0 0 24 24"><path d="M13 5h6v6m0-6-9 9M19 13v6H5V5h6"/></symbol>
+    <symbol id="i-plus" viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></symbol>
+    <symbol id="i-search" viewBox="0 0 24 24"><circle cx="10.8" cy="10.8" r="6.3"/><path d="m16 16 4.2 4.2"/></symbol>
+    <symbol id="i-check" viewBox="0 0 24 24"><path d="m5 12 4.5 4.5L19 7"/></symbol>
+    <symbol id="i-pause" viewBox="0 0 24 24"><path d="M8 5v14M16 5v14"/></symbol>
+    <symbol id="i-play" viewBox="0 0 24 24"><path d="m7 4 12 8-12 8V4Z"/></symbol>
+    <symbol id="i-trash" viewBox="0 0 24 24"><path d="M4 7h16m-10-3h4m-8 3 1 13h10l1-13M10 10v7m4-7v7"/></symbol>
+    <symbol id="i-chevron" viewBox="0 0 24 24"><path d="m7 10 5 5 5-5"/></symbol>
+    <symbol id="i-grid" viewBox="0 0 24 24"><rect x="3" y="3" width="7" height="7" rx="1.5"/><rect x="14" y="3" width="7" height="7" rx="1.5"/><rect x="3" y="14" width="7" height="7" rx="1.5"/><rect x="14" y="14" width="7" height="7" rx="1.5"/></symbol>
+    <symbol id="i-orders" viewBox="0 0 24 24"><rect x="4" y="5" width="16" height="16" rx="2"/><path d="M8 3v4m8-4v4M8 12h8m-8 4h5"/></symbol>
+    <symbol id="i-radio" viewBox="0 0 24 24"><circle cx="12" cy="12" r="2"/><path d="M7.8 7.8a6 6 0 0 0 0 8.4m8.4-8.4a6 6 0 0 1 0 8.4M5 5a10 10 0 0 0 0 14M19 5a10 10 0 0 1 0 14"/></symbol>
+  </svg>
+
+  <div class="app-shell">
+    <header class="app-header">
+      <div class="brand"><span class="brand-mark" aria-hidden="true"><i></i><i></i><i></i><i></i></span><span>Freelance <strong>AI Scout</strong></span></div>
+      <span class="demo-chip">Демо</span>
+    </header>
+
+    <main class="workspace">
+      <section id="screen-overview" class="app-screen" aria-labelledby="overview-title">
+        <div class="section-top"><span class="eyebrow">ТВОЙ РАБОЧИЙ ОБЗОР</span><span class="section-date" id="today-date"></span></div>
+        <h1 id="overview-title">Твой радар<br><span>заказов.</span></h1>
+        <p class="screen-copy">Меньше шума. Больше точных заказов.</p>
+
+        <div class="status-panel">
+          <div class="status-top"><span>МОНИТОРИНГ</span><span class="demo-label">ДЕМОРЕЖИМ</span></div>
+          <div class="status-main"><span class="status-icon" aria-hidden="true"><span></span></span><div><strong id="status-title">Активен в демо</strong><small id="status-subtitle">Проверка каждые 10 минут</small></div></div>
+          <div class="status-bottom"><span>Каналы <strong id="status-channel-count">3 из 4</strong></span><span class="status-dash" aria-hidden="true"></span><span>Отбор <strong>правила + ИИ</strong></span></div>
+        </div>
+
+        <div class="stats-head"><h2>Статистика</h2><div class="period-tabs" role="group" aria-label="Период статистики"><button type="button" class="active" data-period="day" aria-pressed="true">24 ч</button><button type="button" data-period="week" aria-pressed="false">7 дн</button><button type="button" data-period="month" aria-pressed="false">30 дн</button></div></div>
+        <div class="stats-grid" aria-live="polite" aria-atomic="true">
+          <div class="stat-card"><span>НАЙДЕНО</span><strong id="stat-found">18</strong><small>заказов</small></div>
+          <div class="stat-card"><span>ПОДОШЛО</span><strong id="stat-matched">6</strong><small>по фильтрам</small></div>
+          <div class="stat-card"><span>ОТКЛИКИ</span><strong id="stat-applied">2</strong><small>отмечено</small></div>
+        </div>
+        <div class="activity"><div class="activity-head"><h2>Поток находок</h2><span id="activity-label">за 24 часа</span></div><div class="bars" id="activity-bars" role="img" aria-label="Пример активности за 24 часа"></div><div class="chart-axis" aria-hidden="true"><span id="activity-start">24 часа назад</span><span>Сейчас</span></div></div>
+        <div class="dashboard-actions"><button class="primary-button" id="find-orders" type="button">Смотреть находки <svg class="icon" aria-hidden="true"><use href="#i-arrow"/></svg></button><button class="outline-button" id="toggle-monitor" type="button" aria-pressed="false"><svg class="icon" aria-hidden="true"><use href="#i-pause"/></svg><span>Поставить на паузу</span></button></div>
+        <p class="demo-note">Данные — примеры. Переключатели меняют только этот макет.</p>
+      </section>
+
+      <section id="screen-orders" class="app-screen" aria-labelledby="orders-title" hidden>
+        <div class="section-top"><span class="eyebrow">ПОДБОРКА / ДЕМО</span><span class="section-date">1 заказ</span></div>
+        <h1 id="orders-title">Есть за что<br><span>взяться.</span></h1>
+        <p class="screen-copy">Задача, которую можно сделать с ИИ и ручной проверкой.</p>
+        <article class="bot-bubble" id="order-card" aria-label="Демонстрационный заказ">
+          <div class="message-kicker"><span class="signal-dot" aria-hidden="true"></span><span id="order-state">НОВАЯ НАХОДКА</span><span class="message-time">ДЕМО</span></div>
+          <div class="order-source"><span class="source-mark" aria-hidden="true">T</span> Telegram <span class="muted">·</span> Разработка ботов</div>
+          <h2>Собрать Telegram-бота для записи клиентов</h2>
+          <p class="order-description">Нужны запись на услуги, напоминания и простая панель для администратора.</p>
+          <div class="order-facts"><div><span>БЮДЖЕТ</span><strong>35–50 тыс. ₽</strong></div><div><span>ОПУБЛИКОВАН</span><strong>8 мин назад</strong></div></div>
+          <button class="match-reason" id="match-reason" type="button" aria-expanded="false" aria-controls="reason-detail"><span class="match-score">92<small>/100</small></span><span><strong>ИИ-рейтинг задачи</strong><small>Python · Telegram Bot API</small></span><svg class="icon reason-chevron" aria-hidden="true"><use href="#i-chevron"/></svg></button>
+          <div class="reason-detail" id="reason-detail" hidden><strong>Почему стоит рассмотреть</strong><ul><li>Конкретная задача по разработке бота.</li><li>Подходит для работы с Codex и ручной проверки.</li><li>Нужно уточнить CRM, сценарии записи и сроки.</li></ul><p>Рейтинг — подсказка, а не вероятность успеха.</p></div>
+          <div class="order-actions"><button class="primary-button" id="respond-order" type="button">Подготовить отклик <svg class="icon" aria-hidden="true"><use href="#i-arrow"/></svg></button><button class="outline-button" id="open-order" type="button">Исходный заказ <svg class="icon icon-sm" aria-hidden="true"><use href="#i-external"/></svg></button><button class="quiet-button" id="dismiss-order" type="button" aria-pressed="false">Не подходит</button></div>
+          <p class="message-footer">Пример заказа. Реальная ссылка не подключена.</p>
+        </article>
+      </section>
+
+      <section id="screen-channels" class="app-screen" aria-labelledby="channels-title" hidden>
+        <div class="section-top"><span class="eyebrow">ИСТОЧНИКИ / ДЕМО</span><span class="channel-count" id="channel-count">03 / 04</span></div>
+        <h1 id="channels-title">Где искать<br><span>заказы.</span></h1>
+        <p class="screen-copy">Твои источники. Включай полезные, ставь остальные на паузу.</p>
+        <label class="search-field"><svg class="icon" aria-hidden="true"><use href="#i-search"/></svg><input id="channel-search" type="search" placeholder="Найти канал" autocomplete="off" aria-label="Найти канал"></label>
+        <div class="list-heading"><h2>МОИ КАНАЛЫ</h2><span id="active-count">3 активны</span></div>
+        <div class="channel-list" id="channel-list"></div>
+        <p class="empty-search" id="empty-search" hidden>Ничего не найдено. Попробуй другой запрос или добавь канал.</p>
+        <form id="add-channel-form" class="add-form" hidden>
+          <label for="new-channel">Ссылка или @username канала</label>
+          <div><input id="new-channel" placeholder="@new_projects" autocomplete="off" aria-describedby="add-error" maxlength="100"><button type="submit" aria-label="Подтвердить добавление канала"><svg class="icon" aria-hidden="true"><use href="#i-check"/></svg></button></div>
+          <small id="add-error" role="alert"></small>
+        </form>
+        <button class="add-button" id="show-add-form" type="button" aria-expanded="false" aria-controls="add-channel-form"><svg class="icon" aria-hidden="true"><use href="#i-plus"/></svg><span>Добавить канал</span></button>
+        <p class="demo-note">Демоканалы вымышлены. Настоящие источники бота не изменяются.</p>
+      </section>
+
+      <footer class="app-footer"><span>Демо · без подключения к боту</span><button class="reset-button" id="reset-demo" type="button">Сбросить демо</button></footer>
+    </main>
+
+    <nav class="bottom-nav" aria-label="Основные разделы">
+      <a href="#overview" data-screen="overview" aria-current="page"><svg class="icon" aria-hidden="true"><use href="#i-grid"/></svg><span>Обзор</span></a>
+      <a href="#orders" data-screen="orders"><svg class="icon" aria-hidden="true"><use href="#i-orders"/></svg><span>Заказы</span></a>
+      <a href="#channels" data-screen="channels"><svg class="icon" aria-hidden="true"><use href="#i-radio"/></svg><span>Каналы</span></a>
+    </nav>
+  </div>
+
+  <div class="toast" id="toast" role="status" aria-live="polite"></div>
+  <dialog id="order-dialog" class="order-dialog" aria-labelledby="dialog-title" aria-describedby="dialog-description">
+    <form method="dialog"><button class="dialog-close" aria-label="Закрыть" type="submit">×</button></form>
+    <span class="eyebrow">ДЕМО / ЗАКАЗ</span><h2 id="dialog-title"></h2><p id="dialog-description"></p>
+    <div id="draft-fields" hidden><label for="reply-draft">Текст отклика</label><textarea id="reply-draft" rows="7"></textarea><p class="draft-note">Это образец текста, а не новый ИИ-ответ. Ничего не отправляется заказчику.</p><button class="primary-button" id="save-draft" type="button">Сохранить в макете</button></div>
+    <form method="dialog" id="dialog-confirm"><button class="primary-button" type="submit">Понятно</button></form>
+  </dialog>
+  <noscript><p class="noscript">Для переключения экранов и демодействий включи JavaScript.</p></noscript>
+</body>
+</html>

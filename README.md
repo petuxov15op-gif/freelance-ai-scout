@@ -79,6 +79,14 @@ The named `scout_data` volume holds the SQLite database and Telegram session. Pr
 
 Send `/start` to show the four-button menu: **Jobs**, **Channels**, **Add channel**, and **Bot**. Tap a section to switch the bottom keyboard to its actions; use **Back** to return. **Channels** includes **Find chats now** and **Search performance**. **Bot → Settings** toggles employment categories and search groups; **Bot → Applications** shows analytics. To add a channel, send a public `@username` or `t.me` link and confirm **Add** on its card. Job cards let you change status, add a note or amount, and prepare a reply draft. Commands include `/status`, `/sources`, `/pending`, `/latest`, `/top`, `/stats`, `/analytics`, `/settings`, and `/add`.
 
+## Mini App interface preview
+
+The owner-selected dark interface is in [`miniapp/`](miniapp/README.md). Open
+`miniapp/index.html` for the mobile overview, job card, reply draft, and channel
+controls. It is a browser-only demo: sample data and local interactions are not
+connected to the bot or database. Telegram authentication, a backend API, and
+HTTPS deployment are still required for a production Mini App.
+
 ## Tests
 
 ```bash
