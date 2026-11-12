@@ -92,6 +92,11 @@ owner's Telegram menu button. Hosting or a tunnel must be configured separately.
 
 ## Tests
 
+The owner can try a fictional notification sample generated with
+`scout.demo_widget.widget_text()` and `widget_keyboard()`. Its inline buttons
+persist a separate demo choice, show details, and read the saved choice back.
+The sample does not add jobs or channels to monitoring.
+
 ```bash
 pytest -q
 ```

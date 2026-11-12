@@ -641,6 +641,10 @@ def create_router(service) -> Router:
     async def callbacks(callback: CallbackQuery):
         parts = (callback.data or "").split(":")
         try:
+            if parts[0] == "demo":
+                from .demo_widget import handle_widget
+                await handle_widget(callback, repo)
+                return
             if parts[0] == "my":
                 if parts == ["my", "unavailable"]:
                     await callback.answer("У этого канала нет доступной публичной ссылки", show_alert=True)
