@@ -7,6 +7,7 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 
 from telethon import TelegramClient, functions, types
+from telethon.network.connection import ConnectionTcpObfuscated
 from telethon.errors import FloodWaitError, RPCError
 
 from .core import contact_options, likely_job, similar
@@ -50,7 +51,7 @@ def chat_search_term(query: str) -> str:
 
 class TelegramSource:
     def __init__(self, api_id: int, api_hash: str, session_path: str, phone: str = ""):
-        self.client = TelegramClient(session_path, api_id, api_hash)
+        self.client = TelegramClient(session_path, api_id, api_hash, connection=ConnectionTcpObfuscated)
         self.phone = phone
         self._connect_lock = asyncio.Lock()
 
