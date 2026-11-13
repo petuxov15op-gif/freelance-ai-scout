@@ -37,7 +37,8 @@ def card_service(repo):
 
 def callback(job, data):
     return SimpleNamespace(data=data.format(id=job.id), from_user=SimpleNamespace(id=1), answer=AsyncMock(),
-                           message=SimpleNamespace(text="", edit_text=AsyncMock(), answer=AsyncMock()))
+                           message=SimpleNamespace(text="", edit_text=AsyncMock(), answer=AsyncMock(),
+                                                   answer_document=AsyncMock()))
 
 
 @pytest.mark.asyncio
@@ -128,6 +129,32 @@ async def test_draft_generation_cached_owner_edit_reused_and_plan_stays_in_card(
     await cards.handle(tap)
     assert "Проверить макет" in tap.message.edit_text.await_args.args[0]
     assert "Какие поля формы" in tap.message.edit_text.await_args.args[0]
+    tap.message.answer.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_copy_draft_sends_only_saved_text_without_changing_card(repo, job):
+    draft = "Здравствуйте! Сделаю форму <без шаблонов> & проверю адаптив."
+    repo.save_analysis(job.id, "draft_saved", "owner", {"draft": draft})
+    cards = OrderCards(card_service(repo))
+    tap = callback(job, "card:copy_draft:{id}")
+    await cards.handle(tap)
+    assert "Текст для копирования" in str(card_keyboard(job.id, view="draft"))
+    tap.message.answer.assert_awaited_once()
+    assert tap.message.answer.await_args.args == (draft,)
+    assert tap.message.answer.await_args.kwargs["parse_mode"] is None
+    tap.message.edit_text.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_long_draft_is_sent_as_complete_text_file(repo, job):
+    draft = "😀" * 3000
+    repo.save_analysis(job.id, "draft_saved", "owner", {"draft": draft})
+    tap = callback(job, "card:copy_draft:{id}")
+    await OrderCards(card_service(repo)).handle(tap)
+    document = tap.message.answer_document.await_args.args[0]
+    assert document.filename == f"otklik-{job.id}.txt"
+    assert document.data.decode("utf-8") == draft
     tap.message.answer.assert_not_awaited()
 
 

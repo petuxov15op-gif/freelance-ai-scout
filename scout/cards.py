@@ -5,7 +5,7 @@ import logging
 from html import escape
 
 from aiogram.exceptions import TelegramBadRequest
-from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup, LinkPreviewOptions
+from aiogram.types import BufferedInputFile, InlineKeyboardButton, InlineKeyboardMarkup, LinkPreviewOptions
 
 from .service import CONTACT_LABELS, JOB_STATUS_LABELS
 
@@ -32,7 +32,8 @@ def card_keyboard(job_id, link=None, status="new", following=False, view="home")
         rows = [[InlineKeyboardButton(text="✏️ Изменить заметку", callback_data=f"field:note:{job_id}"),
                  InlineKeyboardButton(text="💰 Моя цена", callback_data=f"field:amount:{job_id}")], back]
     elif view == "draft":
-        rows = [[InlineKeyboardButton(text="✏️ Изменить отклик", callback_data=f"field:draft:{job_id}")],
+        rows = [[button("📋 Текст для копирования", "copy_draft")],
+                [InlineKeyboardButton(text="✏️ Изменить отклик", callback_data=f"field:draft:{job_id}")],
                 [button("🔄 Новый вариант", "redraft")], back]
     elif view == "input":
         rows = [[button("Отменить ввод", "cancel")]]
@@ -177,6 +178,19 @@ class OrderCards:
             notice = "✓ Заказ в разделе «Отслеживаемые»" if action == "follow" else "Отслеживание выключено"
         elif kind == "card" and action == "cancel":
             notice = "Ввод отменён"
+        elif kind == "card" and action == "copy_draft":
+            saved = self.repo.analysis(job_id, "draft_saved")
+            draft = saved.result.get("draft", "") if saved else ""
+            if not draft:
+                await callback.answer("Отклик не найден. Подготовь его заново.", show_alert=True)
+                return
+            await callback.answer()
+            if len(draft.encode("utf-16-le")) // 2 <= 4096:
+                await callback.message.answer(draft, parse_mode=None, link_preview_options=NO_PREVIEW)
+            else:
+                document = BufferedInputFile(draft.encode("utf-8"), filename=f"otklik-{job_id}.txt")
+                await callback.message.answer_document(document)
+            return
         elif kind == "field" and action in {"note", "amount", "draft"}:
             self.pending[callback.from_user.id] = (action, job_id, callback.message)
             view = "input"
