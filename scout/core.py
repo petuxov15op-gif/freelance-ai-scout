@@ -3,7 +3,7 @@ from __future__ import annotations
 import hashlib
 import re
 from difflib import SequenceMatcher
-from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
+from urllib.parse import parse_qs, parse_qsl, urlencode, urlsplit, urlunsplit
 
 
 def normalize_text(value: str) -> str:
@@ -19,6 +19,27 @@ def mentions_platform(value: str) -> bool:
         r"workzilla(?:\.com)?|intwork\.top|offersad\.date|jobss\.ru|"
         r"vibejobs\.ru|leadradar)(?![A-Za-zА-Яа-я0-9])",
         value, re.IGNORECASE))
+
+
+def kwork_project_url(links: list[dict] | None) -> str | None:
+    for link in links or []:
+        parsed = urlsplit(link.get("url", ""))
+        host = (parsed.hostname or "").lower()
+        project_id = None
+        if host in {"kwork.ru", "www.kwork.ru"}:
+            match = re.fullmatch(r"/projects/(\d+)(?:/view)?/?", parsed.path)
+            project_id = match[1] if match else None
+        elif host == "offersad.date" and parsed.path.rstrip("/") == "/kw":
+            project_id = (parse_qs(parsed.query).get("project") or [None])[0]
+        if project_id and project_id.isdecimal():
+            return f"https://kwork.ru/projects/{project_id}/view"
+    return None
+
+
+def kwork_excluded(text: str) -> bool:
+    value = normalize_text(text)
+    return bool(re.search(r"\b(?:накрут\w*|продвижен\w*|нужн\w*\s+ключ\w*|"
+                          r"покупк\w*\s+(?:ключ\w*|лицензи\w*))", value))
 
 
 def has_direct_contact_link(value: str, links: list[dict] | None = None,

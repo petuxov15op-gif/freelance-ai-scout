@@ -57,7 +57,7 @@ class FakeAI:
     async def ask(self, kind, text):
         if self.fail:
             raise RuntimeError("OpenRouter недоступен")
-        if kind == "prefilter":
+        if kind in {"prefilter", "kwork_prefilter"}:
             return {"is_job": True, "is_it": True, "codex_feasible": True,
                     "is_ongoing": False, "ai_coding_explicit": False, "reason": "заказ"}
         return {"title": "Сайт", "category": "сайт", "requirements": ["страница"],
@@ -529,6 +529,55 @@ async def test_monitor_does_not_notify_kwork_post(repo):
     assert repo.stats()["jobs"] == 1
     assert repo.jobs()[0].contact_status == "none"
     bot.send_message.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_kwork_fast_monitor_sends_only_fresh_it_orders(repo):
+    kwork = repo.candidate(100, "freelancers_kwork", "Kwork jobs", "", None, 70, "", [])
+    other = repo.candidate(101, "other_jobs", "Other", "", None, 70, "", [])
+    repo.transition_channel(kwork.id, "approved")
+    repo.transition_channel(other.id, "approved")
+    repo.set_setting("platform_sources_enabled", "true")
+    old = datetime.now(timezone.utc) - timedelta(hours=1)
+    posts = [SimpleNamespace(id=1, raw_text="Нужен сайт для кафе, старый заказ Kwork",
+                             date=old, media=None, fwd_from=None, entities=None,
+                             buttons=[[SimpleNamespace(url="http://offersad.date/kw/?project=3273401", text="№ 3273401")]])]
+    seen = []
+
+    class Source:
+        async def messages(self, channel, min_id):
+            seen.append(channel.id)
+            for post in posts:
+                if post.id > min_id:
+                    yield post
+
+    kinds = []
+
+    class AI(FakeAI):
+        async def ask(self, kind, text):
+            kinds.append(kind)
+            return await super().ask(kind, text)
+
+    bot = SimpleNamespace(send_message=AsyncMock(return_value=SimpleNamespace(message_id=42)))
+    service = ScoutService(repo, Source(), AI(), bot, 1)
+    await service.monitor_kwork()
+    assert seen == [kwork.id]
+    assert kinds[:2] == ["kwork_prefilter", "deep"]
+    bot.send_message.assert_not_awaited()
+
+    posts.append(SimpleNamespace(id=2, raw_text="Нужен лендинг для кафе, новый заказ Kwork",
+                                 date=datetime.now(timezone.utc), media=None, fwd_from=None, entities=None,
+                                 buttons=[[SimpleNamespace(url="http://offersad.date/kw/?project=3273402", text="№ 3273402")]]))
+    await service.monitor_kwork()
+    bot.send_message.assert_awaited_once()
+    assert repo.job_link(repo.jobs()[0].id) == "https://kwork.ru/projects/3273402/view"
+
+    posts.append(SimpleNamespace(id=3, raw_text="Нужен бот для накрутки лайков и просмотров",
+                                 date=datetime.now(timezone.utc), media=None, fwd_from=None, entities=None,
+                                 buttons=[[SimpleNamespace(url="http://offersad.date/kw/?project=3273403", text="№ 3273403")]]))
+    await service.monitor_kwork()
+    assert repo.stats()["jobs"] == 2
+    bot.send_message.assert_awaited_once()
 
 
 @pytest.mark.asyncio

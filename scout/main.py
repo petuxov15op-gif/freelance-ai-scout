@@ -48,6 +48,7 @@ async def run() -> None:
     dispatcher.include_router(create_router(service))
     scheduler = AsyncIOScheduler(timezone=ZoneInfo("Asia/Yekaterinburg"))
     scheduler.add_job(service.monitor, "interval", minutes=10, id="monitor", max_instances=1, coalesce=True)
+    scheduler.add_job(service.monitor_kwork, "interval", minutes=2, id="monitor_kwork", max_instances=1, coalesce=True)
     initial_monitor = None
     discovery_task = None
     web_runner = None

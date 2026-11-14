@@ -2,7 +2,8 @@ import pytest
 
 from scout.ai import validate_response
 from scout.core import (calculate_score, explicit_ai_coding, explicit_it_task, likely_job, normalize_link,
-                        has_direct_contact_link, mentions_platform, ongoing_role, potential_job, similar, text_hash)
+                        has_direct_contact_link, kwork_excluded, kwork_project_url, mentions_platform,
+                        ongoing_role, potential_job, similar, text_hash)
 
 
 def test_platform_names_and_direct_contact():
@@ -15,6 +16,18 @@ def test_platform_names_and_direct_contact():
     assert not has_direct_contact_link("Напишите в @job_developer", source_username="job_developer")
     assert has_direct_contact_link("Нужен бот", [{"label": "Написать заказчику", "url": "https://t.me/client12345"}])
     assert not has_direct_contact_link("Нужен бот", [{"label": "Подробнее", "url": "https://t.me/SetJobs_bot"}])
+
+
+def test_kwork_project_link_uses_official_site():
+    assert kwork_project_url([{"url": "http://offersad.date/kw/?project=3273401"}]) == "https://kwork.ru/projects/3273401/view"
+    assert kwork_project_url([{"url": "https://kwork.ru/projects/3273401"}]) == "https://kwork.ru/projects/3273401/view"
+    assert kwork_project_url([{"url": "https://other.example/kw/?project=3273401"}]) is None
+
+
+def test_kwork_excludes_obvious_non_development_orders():
+    assert kwork_excluded("Нужен бот для накрутки лайков и просмотров")
+    assert kwork_excluded("Нужны ключи или последние обновления лицензий Joomla")
+    assert not kwork_excluded("Нужен лендинг и адаптивная верстка для кафе")
 
 
 def test_relevance():

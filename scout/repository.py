@@ -21,6 +21,8 @@ class Repository:
         with transaction(self.factory) as db:
             if not db.get(Setting, "instant_notifications_start_at"):
                 db.add(Setting(key="instant_notifications_start_at", value=utcnow().isoformat()))
+            if not db.get(Setting, "kwork_auto_start_at"):
+                db.add(Setting(key="kwork_auto_start_at", value=utcnow().isoformat()))
 
     def setting(self, key: str, default: str = "") -> str:
         with self.factory() as db:

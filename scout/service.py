@@ -10,7 +10,8 @@ from aiogram import Bot
 from telethon import types
 from telethon.errors import FloodWaitError, RPCError
 
-from .core import (contact_options, employment_type, explicit_it_task, high_risk_role, office_required,
+from .core import (contact_options, employment_type, explicit_it_task, high_risk_role,
+                   kwork_excluded, kwork_project_url, office_required,
                    likely_job, mentions_platform, potential_job, similar)
 from .models import Channel
 from .repository import Repository
@@ -103,6 +104,20 @@ class ScoutService:
 
     def source_paused(self, channel: Channel | None) -> bool:
         return not self.platforms_enabled() and self.platform_source(channel)
+
+    @staticmethod
+    def kwork_source(channel: Channel | None) -> bool:
+        if not channel:
+            return False
+        name = " ".join((channel.username or "", channel.title or "")).lower()
+        return "kwork" in name or "кворк" in name
+
+    @classmethod
+    def kwork_post(cls, channel: Channel | None, message) -> bool:
+        if not cls.kwork_source(channel):
+            return False
+        links = (message.metadata_json or {}).get("outbound_links")
+        return bool(kwork_project_url(links) or re.search(r"\bkwork(?:\.ru)?\b|кворк", message.text, re.I))
 
     async def set_platforms_enabled(self, enabled: bool) -> None:
         if enabled and not self.platforms_enabled():
@@ -363,7 +378,10 @@ class ScoutService:
             # If all distinct queries were free/cached, check again later for new posts.
             return await finish("done", datetime.now(timezone.utc) + timedelta(hours=1))
 
-    async def monitor(self) -> None:
+    async def monitor_kwork(self) -> None:
+        await self.monitor(kwork_only=True)
+
+    async def monitor(self, kwork_only: bool = False) -> None:
         if self.monitor_lock.locked() or self.repo.setting("monitoring_paused", "false") == "true":
             return
         async with self.monitor_lock:
@@ -372,6 +390,8 @@ class ScoutService:
             try:
                 channels = self.repo.list_channels("approved")
                 channels = [channel for channel in channels if not self.source_paused(channel)]
+                if kwork_only:
+                    channels = [channel for channel in channels if self.kwork_source(channel)]
                 log.info("Мониторинг начат: одобренных каналов %s", len(channels))
                 for channel in channels:
                     if self.repo.setting("monitoring_paused", "false") == "true":
@@ -402,8 +422,9 @@ class ScoutService:
 
     def _save_item(self, channel: Channel, item, advance_cursor: bool = True) -> None:
         from .telegram import outbound_links
-        link = f"https://t.me/{channel.username}/{item.id}" if channel.username else None
         links = outbound_links(item)
+        link = (kwork_project_url(links) if self.kwork_source(channel) else None)
+        link = link or (f"https://t.me/{channel.username}/{item.id}" if channel.username else None)
         sender = getattr(item, "sender", None)
         author = sender.username if isinstance(sender, types.User) else None
         contact = contact_options(item.raw_text or "", links, channel.username, author)
@@ -458,6 +479,7 @@ class ScoutService:
                                           channel.username if channel else None,
                                           (message.metadata_json or {}).get("author_username"))
                 reason = ("source_paused" if self.source_paused(channel) else
+                          "kwork_excluded" if self.kwork_post(channel, message) and kwork_excluded(message.text) else
                           "not_job" if not potential_job(message.text) else
                           "no_it_signal" if not explicit_it_task(message.text) else
                           "requires_verified_expertise" if high_risk_role(message.text) else
@@ -475,7 +497,7 @@ class ScoutService:
                         await self.notify_job(existing.id, "instant")
                     self.repo.mark_message(message.id, "linked")
                     continue
-                pre = await self.ai.ask("prefilter", message.text)
+                pre = await self.ai.ask("kwork_prefilter" if self.kwork_post(channel, message) else "prefilter", message.text)
                 if not (pre["is_job"] and pre["codex_feasible"] and pre["is_it"]):
                     reason = "ai_not_job" if not pre["is_job"] else "ai_not_feasible" if not pre["codex_feasible"] else "ai_not_it"
                     self.repo.mark_message(message.id, "irrelevant", reason)
@@ -508,9 +530,16 @@ class ScoutService:
         message = self.repo.job_message(job_id)
         channel = self.repo.job_channel(job_id)
         job = self.repo.job(job_id)
-        if (not job or channel is None or channel.status != "approved" or self.source_paused(channel)
-                or (not allow_unconfirmed and job.contact_status not in {"direct_free", "platform_free"})):
+        if not job or message is None or channel is None or channel.status != "approved" or self.source_paused(channel):
             return
+        kwork = self.kwork_post(channel, message)
+        if not allow_unconfirmed and job.contact_status not in {"direct_free", "platform_free"} and not kwork:
+            return
+        if kwork and not allow_unconfirmed:
+            started = datetime.fromisoformat(self.repo.setting("kwork_auto_start_at"))
+            published = message.published_at.replace(tzinfo=timezone.utc) if message.published_at.tzinfo is None else message.published_at
+            if published < max(started, datetime.now(timezone.utc) - timedelta(minutes=30)):
+                return
         if not self.repo.claim_notification(job_id, kind):
             return
         try:

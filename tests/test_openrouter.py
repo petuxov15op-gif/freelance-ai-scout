@@ -29,6 +29,28 @@ async def test_openrouter_structured_and_usage(repo):
 
 
 @pytest.mark.asyncio
+async def test_kwork_prefilter_has_separate_low_budget_rules(repo):
+    def respond(request):
+        payload = json.loads(request.content)
+        system = payload["messages"][0]["content"]
+        assert payload["response_format"]["json_schema"]["name"] == "kwork_prefilter"
+        assert "Маленький бюджет сам по себе не повод" in system
+        assert "накрутку лайков или трафика" in system
+        return httpx.Response(200, json={"choices": [{"message": {"content": json.dumps({
+            "is_job": True, "is_it": True, "codex_feasible": True,
+            "is_ongoing": False, "ai_coding_explicit": False, "reason": "веб-заказ",
+        })}}]})
+
+    ai = OpenRouter("fake-key", "test-model", repo, 1)
+    await ai.client.aclose()
+    ai.client = httpx.AsyncClient(transport=httpx.MockTransport(respond), base_url="https://openrouter.ai/api/v1")
+    try:
+        assert (await ai.ask("kwork_prefilter", "Нужен лендинг на Kwork"))["codex_feasible"]
+    finally:
+        await ai.close()
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize("announcement,case_id,expected_link", [
     ("Нужен простой сайт, без Тильды", None, False),
     ("Нужен простой сайт, без Тильды", "null", False),
