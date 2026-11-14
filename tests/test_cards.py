@@ -133,17 +133,30 @@ async def test_draft_generation_cached_owner_edit_reused_and_plan_stays_in_card(
 
 
 @pytest.mark.asyncio
-async def test_copy_draft_sends_only_saved_text_without_changing_card(repo, job):
+async def test_copy_draft_shows_only_saved_text_in_same_card(repo, job):
     draft = "Здравствуйте! Сделаю форму <без шаблонов> & проверю адаптив."
     repo.save_analysis(job.id, "draft_saved", "owner", {"draft": draft})
     cards = OrderCards(card_service(repo))
     tap = callback(job, "card:copy_draft:{id}")
     await cards.handle(tap)
-    assert "Текст для копирования" in str(card_keyboard(job.id, view="draft"))
-    tap.message.answer.assert_awaited_once()
-    assert tap.message.answer.await_args.args == (draft,)
-    assert tap.message.answer.await_args.kwargs["parse_mode"] is None
-    tap.message.edit_text.assert_not_awaited()
+    assert "Показать для копирования" in str(card_keyboard(job.id, view="draft"))
+    tap.message.edit_text.assert_awaited_once()
+    assert tap.message.edit_text.await_args.args == ("Здравствуйте! Сделаю форму &lt;без шаблонов&gt; &amp; проверю адаптив.",)
+    assert "К отклику" in str(tap.message.edit_text.await_args.kwargs["reply_markup"])
+    tap.message.answer.assert_not_awaited()
+    tap.data = f"draft:{job.id}"
+    await cards.handle(tap)
+    assert "Черновик отклика" in tap.message.edit_text.await_args.args[0]
+
+
+@pytest.mark.asyncio
+async def test_copy_draft_keeps_full_text_beyond_card_preview(repo, job):
+    draft = "Текст отклика. " * 200
+    repo.save_analysis(job.id, "draft_saved", "owner", {"draft": draft})
+    tap = callback(job, "card:copy_draft:{id}")
+    await OrderCards(card_service(repo)).handle(tap)
+    assert unescape(tap.message.edit_text.await_args.args[0]) == draft
+    tap.message.answer.assert_not_awaited()
 
 
 @pytest.mark.asyncio

@@ -32,9 +32,11 @@ def card_keyboard(job_id, link=None, status="new", following=False, view="home")
         rows = [[InlineKeyboardButton(text="✏️ Изменить заметку", callback_data=f"field:note:{job_id}"),
                  InlineKeyboardButton(text="💰 Моя цена", callback_data=f"field:amount:{job_id}")], back]
     elif view == "draft":
-        rows = [[button("📋 Текст для копирования", "copy_draft")],
+        rows = [[button("📋 Показать для копирования", "copy_draft")],
                 [InlineKeyboardButton(text="✏️ Изменить отклик", callback_data=f"field:draft:{job_id}")],
                 [button("🔄 Новый вариант", "redraft")], back]
+    elif view == "copy":
+        rows = [[InlineKeyboardButton(text="← К отклику", callback_data=f"draft:{job_id}")]]
     elif view == "input":
         rows = [[button("Отменить ввод", "cancel")]]
     elif view in {"plan", "source"}:
@@ -54,6 +56,9 @@ def card_keyboard(job_id, link=None, status="new", following=False, view="home")
 
 
 def card_text(repo, job_id, view="home", notice="", sample=False):
+    if view == "copy":
+        saved = repo.analysis(job_id, "draft_saved")
+        return escape(saved.result.get("draft", "") if saved else "")
     job = repo.job(job_id)
     analysis = repo.analysis(job_id)
     data = analysis.result if analysis else {}
@@ -186,7 +191,7 @@ class OrderCards:
                 return
             await callback.answer()
             if len(draft.encode("utf-16-le")) // 2 <= 4096:
-                await callback.message.answer(draft, parse_mode=None, link_preview_options=NO_PREVIEW)
+                await self.show(callback.message, job_id, "copy")
             else:
                 document = BufferedInputFile(draft.encode("utf-8"), filename=f"otklik-{job_id}.txt")
                 await callback.message.answer_document(document)
