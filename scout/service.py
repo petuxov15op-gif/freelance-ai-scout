@@ -370,20 +370,6 @@ class ScoutService:
             self.last_monitor_started = datetime.now(timezone.utc)
             self.last_monitor_errors = []
             try:
-                latest_by_telegram_id = {}
-                if hasattr(self.source, "subscribed_chats"):
-                    reactivate = self.repo.setting("subscriptions_initialized", "false") != "true"
-                    changed = 0
-                    try:
-                        async for telegram_id, username, title, latest in self.source.subscribed_chats():
-                            latest_by_telegram_id[telegram_id] = latest
-                            changed += self.repo.subscribe_chat(telegram_id, username, title, latest, reactivate)
-                        if reactivate:
-                            self.repo.set_setting("subscriptions_initialized", "true")
-                        log.info("Подписки Telegram сверены; добавлено или включено: %s", changed)
-                    except Exception as exc:
-                        self.last_monitor_errors.append(f"Синхронизация подписок: {type(exc).__name__}")
-                        log.exception("Не удалось сверить подписки Telegram")
                 channels = self.repo.list_channels("approved")
                 channels = [channel for channel in channels if not self.source_paused(channel)]
                 log.info("Мониторинг начат: одобренных каналов %s", len(channels))
@@ -391,10 +377,7 @@ class ScoutService:
                     if self.repo.setting("monitoring_paused", "false") == "true":
                         break
                     try:
-                        cursor = self.repo.cursor(channel.id)
-                        if channel.telegram_id in latest_by_telegram_id and latest_by_telegram_id[channel.telegram_id] <= cursor:
-                            continue
-                        async for item in self.source.messages(channel, cursor):
+                        async for item in self.source.messages(channel, self.repo.cursor(channel.id)):
                             self._save_item(channel, item)
                             await asyncio.sleep(.3)
                     except Exception as exc:

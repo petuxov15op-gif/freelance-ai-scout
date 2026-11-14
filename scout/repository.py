@@ -70,29 +70,6 @@ class Repository:
         with self.factory() as db:
             return list(db.scalars(select(Channel).where(Channel.status.in_(("approved", "paused"))).order_by(Channel.id)))
 
-    def subscribe_chat(self, telegram_id: int, username: str | None, title: str,
-                       latest_cursor: int, reactivate: bool = False) -> bool:
-        with transaction(self.factory) as db:
-            channel = db.scalar(select(Channel).where(Channel.telegram_id == telegram_id))
-            if channel is None:
-                channel = Channel(telegram_id=telegram_id, username=username, title=title[:255],
-                                  status="approved", reviewed_at=utcnow())
-                db.add(channel)
-                db.flush()
-                db.add(MonitoringState(channel_id=channel.id, last_message_id=latest_cursor))
-                return True
-            if channel.status == "approved" or not reactivate:
-                return False
-            channel.status = "approved"
-            channel.reviewed_at = utcnow()
-            state = db.get(MonitoringState, channel.id)
-            if state is None:
-                db.add(MonitoringState(channel_id=channel.id, last_message_id=latest_cursor))
-            elif latest_cursor > state.last_message_id:
-                state.last_message_id = latest_cursor
-                state.checked_at = utcnow()
-            return True
-
     def get_channel(self, channel_id: int) -> Channel | None:
         with self.factory() as db:
             return db.get(Channel, channel_id)
