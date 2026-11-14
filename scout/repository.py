@@ -280,6 +280,20 @@ class Repository:
             return list(db.scalars(select(Job).where(Job.score >= minimum_score, Job.created_at >= started_at,
                      ~Job.id.in_(select(Notification.job_id).where(Notification.kind == "instant"))).limit(100)))
 
+    def today_unsent_job_ids(self, since: datetime) -> list[int]:
+        with self.factory() as db:
+            query = (select(Job.id).join(JobSource, JobSource.job_id == Job.id)
+                     .join(Message, Message.id == JobSource.message_id)
+                     .join(Channel, Channel.id == Message.channel_id)
+                     .where(Channel.status == "approved", Job.status != "irrelevant", Message.published_at >= since,
+                            ~Job.id.in_(select(Notification.job_id).where(Notification.kind == "instant")))
+                     .distinct().order_by(Job.id))
+            return list(db.scalars(query))
+
+    def sent_notification_count(self) -> int:
+        with self.factory() as db:
+            return db.scalar(select(func.count()).select_from(Notification).where(Notification.sent_at.is_not(None)))
+
     def claim_notification(self, job_id: int, kind: str) -> bool:
         try:
             with transaction(self.factory) as db:

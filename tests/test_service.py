@@ -135,10 +135,10 @@ async def test_backfill_today_checks_posts_before_cursor_without_duplicate_notif
 
     bot = SimpleNamespace(send_message=AsyncMock(return_value=SimpleNamespace(message_id=42)))
     service = ScoutService(repo, Source(), FakeAI(), bot, 1)
-    assert await service.backfill_today() == (1, 1, 1, [])
+    assert await service.backfill_today() == (1, 1, 1, 1, [])
     assert repo.cursor(channel.id) == 10
     assert repo.stats()["jobs"] == 1
-    assert await service.backfill_today() == (1, 1, 0, [])
+    assert await service.backfill_today() == (1, 1, 0, 0, [])
     bot.send_message.assert_awaited_once()
 
 
@@ -529,6 +529,25 @@ async def test_monitor_does_not_notify_kwork_post(repo):
     assert repo.stats()["jobs"] == 1
     assert repo.jobs()[0].contact_status == "none"
     bot.send_message.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_check_today_sends_unconfirmed_job_once(repo):
+    channel = repo.candidate(100, "scoutjobs", "Jobs", "", None, 70, "", [])
+    repo.transition_channel(channel.id, "approved")
+    post = SimpleNamespace(id=1, raw_text="Нужен сайт для компании, отклик через Kwork.ru",
+                           date=datetime.now(timezone.utc), media=None, fwd_from=None, entities=None, buttons=None)
+
+    class Source:
+        async def messages_since(self, channel, since):
+            yield post
+
+    bot = SimpleNamespace(send_message=AsyncMock(return_value=SimpleNamespace(message_id=42)))
+    service = ScoutService(repo, Source(), FakeAI(), bot, 1)
+    assert await service.backfill_today() == (1, 1, 1, 1, [])
+    assert repo.jobs()[0].contact_status == "none"
+    assert await service.backfill_today() == (1, 1, 0, 0, [])
+    bot.send_message.assert_awaited_once()
 
 
 @pytest.mark.asyncio

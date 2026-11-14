@@ -407,13 +407,15 @@ def create_router(service) -> Router:
             return
         await message.answer("Проверяю все публикации за сегодня в одобренных каналах. Подходящие предложения пришлю отдельно.")
         try:
-            channels, scanned, new, errors = await service.backfill_today()
+            channels, scanned, new, sent, errors = await service.backfill_today()
         except Exception:
             log.exception("Ручная проверка публикаций за сегодня")
             await message.answer("Проверка прервалась. Подробности записаны в журнал бота.")
             return
         await message.answer(f"Проверка за сегодня завершена: каналов {channels}, публикаций {scanned}, "
-                             f"новых для базы {new}."
+                             f"новых для базы {new}, карточек отправлено {sent}."
+                             + (" Если контакт не подтверждён, это указано в карточке." if sent else
+                                " Новых подходящих вариантов для отправки не осталось." if not errors else "")
                              + (f" Ошибки в {len(errors)} случаях; попробуй позже ещё раз." if errors else ""))
 
     @router.message(Command("sources", "channels"))

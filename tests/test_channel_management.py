@@ -70,7 +70,7 @@ async def test_disabled_channel_is_skipped_by_monitor_and_backfill(repo):
     service = ScoutService(repo, Source(), SimpleNamespace(), SimpleNamespace(), 1)
     assert await service.set_channel_monitoring(first.id, False)
     await service.monitor()
-    assert await service.backfill_today() == (1, 0, 0, [])
+    assert await service.backfill_today() == (1, 0, 0, 0, [])
     assert seen == [("monitor", second.id, 4), ("backfill", second.id)]
     assert await service.set_channel_monitoring(first.id, True)
     assert repo.cursor(first.id) == 20

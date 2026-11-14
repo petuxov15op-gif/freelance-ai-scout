@@ -412,7 +412,7 @@ class ScoutService:
                                 "outbound_links": links, "contact_url": contact.get("url"),
                                 "author_username": author}, advance_cursor=advance_cursor)
 
-    async def backfill_today(self) -> tuple[int, int, int, list[str]]:
+    async def backfill_today(self) -> tuple[int, int, int, int, list[str]]:
         async with self.monitor_lock:
             self.last_monitor_started = datetime.now(timezone.utc)
             self.last_monitor_errors = []
@@ -421,6 +421,7 @@ class ScoutService:
             channels = [channel for channel in self.repo.list_channels("approved")
                         if not self.source_paused(channel)]
             before = self.repo.stats()["messages"]
+            notifications_before = self.repo.sent_notification_count()
             scanned = 0
             try:
                 for channel in channels:
@@ -434,7 +435,14 @@ class ScoutService:
                         log.exception("Повторная проверка канала %s прервана", channel.title)
                 new_messages = self.repo.stats()["messages"] - before
                 await self.process_pending(limit=None)
-                return len(channels), scanned, new_messages, self.last_monitor_errors.copy()
+                for job_id in self.repo.today_unsent_job_ids(today):
+                    try:
+                        await self.notify_job(job_id, "instant", allow_unconfirmed=True)
+                    except Exception as exc:
+                        self.last_monitor_errors.append(f"Уведомление: {type(exc).__name__}")
+                        log.exception("Ручное уведомление заказа %s не удалось", job_id)
+                sent = self.repo.sent_notification_count() - notifications_before
+                return len(channels), scanned, new_messages, sent, self.last_monitor_errors.copy()
             finally:
                 self.last_monitor_finished = datetime.now(timezone.utc)
 
@@ -495,12 +503,13 @@ class ScoutService:
                     self.last_monitor_errors.append(f"Уведомление: {type(exc).__name__}")
                     log.exception("Повторное уведомление заказа %s не удалось", job.id)
 
-    async def notify_job(self, job_id: int, kind: str) -> None:
+    async def notify_job(self, job_id: int, kind: str, allow_unconfirmed: bool = False) -> None:
         from .cards import NO_PREVIEW, card_keyboard, card_text
         message = self.repo.job_message(job_id)
         channel = self.repo.job_channel(job_id)
         job = self.repo.job(job_id)
-        if not job or channel is None or channel.status != "approved" or job.contact_status not in {"direct_free", "platform_free"} or self.source_paused(channel):
+        if (not job or channel is None or channel.status != "approved" or self.source_paused(channel)
+                or (not allow_unconfirmed and job.contact_status not in {"direct_free", "platform_free"})):
             return
         if not self.repo.claim_notification(job_id, kind):
             return
