@@ -370,6 +370,18 @@ class ScoutService:
             self.last_monitor_started = datetime.now(timezone.utc)
             self.last_monitor_errors = []
             try:
+                if hasattr(self.source, "subscribed_chats"):
+                    reactivate = self.repo.setting("subscriptions_initialized", "false") != "true"
+                    changed = 0
+                    try:
+                        async for telegram_id, username, title, latest in self.source.subscribed_chats():
+                            changed += self.repo.subscribe_chat(telegram_id, username, title, latest, reactivate)
+                        if reactivate:
+                            self.repo.set_setting("subscriptions_initialized", "true")
+                        log.info("Подписки Telegram сверены; добавлено или включено: %s", changed)
+                    except Exception as exc:
+                        self.last_monitor_errors.append(f"Синхронизация подписок: {type(exc).__name__}")
+                        log.exception("Не удалось сверить подписки Telegram")
                 channels = self.repo.list_channels("approved")
                 channels = [channel for channel in channels if not self.source_paused(channel)]
                 log.info("Мониторинг начат: одобренных каналов %s", len(channels))

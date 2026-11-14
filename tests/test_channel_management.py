@@ -78,6 +78,35 @@ async def test_disabled_channel_is_skipped_by_monitor_and_backfill(repo):
     assert seen[-2:] == [("monitor", first.id, 20), ("monitor", second.id, 4)]
 
 
+@pytest.mark.asyncio
+async def test_monitor_imports_subscriptions_and_keeps_later_manual_pauses(repo):
+    paused = add_channel(repo, 101, "Paused", "paused_jobs")
+    assert repo.set_monitoring(paused.id, False)
+    seen = []
+
+    class Source:
+        async def subscribed_chats(self):
+            yield 101, "paused_jobs", "Paused", 12
+            yield 102, None, "Private group", 30
+
+        async def messages(self, channel, min_id):
+            seen.append((channel.telegram_id, min_id))
+            if False:
+                yield None
+
+    service = ScoutService(repo, Source(), SimpleNamespace(), SimpleNamespace(), 1)
+    await service.monitor()
+    assert repo.get_channel(paused.id).status == "approved"
+    assert seen == [(101, 12), (102, 30)]
+    assert repo.setting("subscriptions_initialized") == "true"
+
+    assert repo.set_monitoring(paused.id, False)
+    seen.clear()
+    await service.monitor()
+    assert repo.get_channel(paused.id).status == "paused"
+    assert seen == [(102, 30)]
+
+
 def test_russian_intents():
     assert channel_intent("Покажи мои каналы") == ("list", "all")
     assert channel_intent("Список источников") == ("list", "all")

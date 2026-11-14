@@ -89,6 +89,14 @@ class TelegramSource:
         return [chat for chat in result.chats
                 if isinstance(chat, types.Channel) and chat.username]
 
+    async def subscribed_chats(self):
+        await self.ensure_connected()
+        async for dialog in self.client.iter_dialogs():
+            entity = dialog.entity
+            if isinstance(entity, (types.Channel, types.Chat)):
+                yield entity.id, getattr(entity, "username", None), dialog.name, (
+                    dialog.message.id if dialog.message else 0)
+
     async def post_search_quota(self, query: str):
         await self.ensure_connected()
         return await self.client(functions.channels.CheckSearchPostsFloodRequest(query=query))
