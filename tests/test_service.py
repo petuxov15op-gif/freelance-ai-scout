@@ -235,7 +235,7 @@ async def test_suitable_job_is_sent_without_score_threshold(repo):
 
 
 @pytest.mark.asyncio
-async def test_direct_site_request_survives_ai_false_negative_and_synthetic_contacts_are_warned(repo):
+async def test_priority_direct_site_requests_skip_slow_prefilter_and_warn_on_synthetic_contacts(repo):
     channel = repo.candidate(100, "program_job", "IT заказы", "", None, 70, "", [])
     repo.transition_channel(channel.id, "approved")
 
@@ -251,15 +251,21 @@ async def test_direct_site_request_survives_ai_false_negative_and_synthetic_cont
                 yield SimpleNamespace(id=number, raw_text=body, date=datetime.now(timezone.utc),
                                       media=None, fwd_from=None)
 
-    class RejectingAI(FakeAI):
+    class RecordingAI(FakeAI):
+        def __init__(self):
+            super().__init__()
+            self.prefilter_calls = 0
+
         async def ask(self, kind, text):
             if kind == "prefilter":
-                return {"is_job": "Figma" in text, "is_it": False, "codex_feasible": False}
+                self.prefilter_calls += 1
             return await super().ask(kind, text)
 
     bot = SimpleNamespace(send_message=AsyncMock(return_value=SimpleNamespace(message_id=42)))
-    service = ScoutService(repo, Source(), RejectingAI(), bot, 1)
+    ai = RecordingAI()
+    service = ScoutService(repo, Source(), ai, bot, 1)
     await service.monitor()
+    assert ai.prefilter_calls == 0
     assert repo.stats()["jobs"] == 4
     assert bot.send_message.await_count == 4
     assert all(job.contact_status == "direct_free" for job in repo.jobs())

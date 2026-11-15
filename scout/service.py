@@ -556,13 +556,14 @@ class ScoutService:
                     self.repo.mark_message(message.id, "linked")
                     continue
                 priority = (channel.username or "").lower() == PRIORITY_CHANNEL
-                pre = await self.ai.ask("kwork_prefilter" if self.kwork_post(channel, message) else "prefilter", message.text)
                 direct_request = (priority and
                                   clear_direct_it_request(message.text, contact["status"], employment))
-                if not (pre["is_job"] and pre["codex_feasible"] and pre["is_it"]) and not direct_request:
-                    reason = "ai_not_job" if not pre["is_job"] else "ai_not_feasible" if not pre["codex_feasible"] else "ai_not_it"
-                    self.repo.mark_message(message.id, "irrelevant", reason)
-                    continue
+                if not direct_request:
+                    pre = await self.ai.ask("kwork_prefilter" if self.kwork_post(channel, message) else "prefilter", message.text)
+                    if not (pre["is_job"] and pre["codex_feasible"] and pre["is_it"]):
+                        reason = "ai_not_job" if not pre["is_job"] else "ai_not_feasible" if not pre["codex_feasible"] else "ai_not_it"
+                        self.repo.mark_message(message.id, "irrelevant", reason)
+                        continue
                 job, created = self.repo.attach_job(message)
                 if not created and self.repo.analysis(job.id):
                     self.repo.mark_message(message.id, "linked")
