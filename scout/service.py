@@ -384,6 +384,23 @@ class ScoutService:
     async def monitor_kwork(self) -> None:
         await self.monitor(kwork_only=True)
 
+    def channel_interval(self, row: dict, now: datetime | None = None) -> float:
+        channel = row["channel"]
+        if (channel.username or "").lower() == PRIORITY_CHANNEL:
+            return .5
+        if self.kwork_source(channel) or row["positive_30d"] or row["saved"]:
+            return 2
+        if row["alerts"] > row["rejected"]:
+            return 5
+        now = now or datetime.now(timezone.utc)
+        approved_at = channel.reviewed_at or channel.created_at
+        if approved_at.tzinfo is None:
+            approved_at = approved_at.replace(tzinfo=timezone.utc)
+        return 30 if approved_at <= now - timedelta(days=7) else 10
+
+    async def monitor_due(self) -> None:
+        await self.monitor(due_only=True)
+
     async def monitor_priority(self) -> None:
         if self.repo.setting("monitoring_paused", "false") == "true":
             return
@@ -396,11 +413,12 @@ class ScoutService:
                 async for item in self.source.messages(channel, self.repo.cursor(channel.id)):
                     self._save_item(channel, item)
                     await self.process_pending(channel_id=channel.id)
+                self.repo.mark_channel_checked(channel.id)
                 await self.process_pending(channel_id=channel.id)
             except Exception:
                 log.exception("Быстрая проверка @%s прервана; повторим позже", PRIORITY_CHANNEL)
 
-    async def monitor(self, kwork_only: bool = False) -> None:
+    async def monitor(self, kwork_only: bool = False, due_only: bool = False) -> None:
         if self.repo.setting("monitoring_paused", "false") == "true":
             return
         async with self.monitor_lock:
@@ -411,6 +429,20 @@ class ScoutService:
                 channels = [channel for channel in channels if not self.source_paused(channel)]
                 if kwork_only:
                     channels = [channel for channel in channels if self.kwork_source(channel)]
+                elif due_only:
+                    now = datetime.now(timezone.utc)
+                    reports = {row["channel"].id: row for row in self.repo.channel_report()}
+                    def due(channel):
+                        row = reports[channel.id]
+                        if (channel.username or "").lower() == PRIORITY_CHANNEL:
+                            return False
+                        checked = row["checked_at"]
+                        if checked is None:
+                            return True
+                        checked = checked if checked.tzinfo else checked.replace(tzinfo=timezone.utc)
+                        return checked <= now - timedelta(minutes=self.channel_interval(row, now))
+                    channels = [channel for channel in channels if due(channel)]
+                    channels.sort(key=lambda channel: self.channel_interval(reports[channel.id], now))
                 else:
                     channels.sort(key=lambda channel: (channel.username or "").lower() != PRIORITY_CHANNEL)
                 log.info("Мониторинг начат: одобренных каналов %s", len(channels))
@@ -421,7 +453,10 @@ class ScoutService:
                         async for item in self.source.messages(channel, self.repo.cursor(channel.id)):
                             self._save_item(channel, item)
                             await asyncio.sleep(.3)
+                        self.repo.mark_channel_checked(channel.id)
                         if (channel.username or "").lower() == PRIORITY_CHANNEL:
+                            await self.process_pending(channel_id=channel.id)
+                        elif due_only:
                             await self.process_pending(channel_id=channel.id)
                     except Exception as exc:
                         self.last_monitor_errors.append(f"@{channel.username or channel.id}: {type(exc).__name__}")

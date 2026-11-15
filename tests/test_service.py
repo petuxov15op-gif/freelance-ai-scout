@@ -6,6 +6,7 @@ import pytest
 from telethon.errors import FloodWaitError
 
 from scout.bot import create_router, job_keyboard
+from scout.models import Channel, MonitoringState
 from scout.service import DISCOVERY_GROUPS, ScoutService
 from scout.telegram import chat_search_term
 
@@ -119,6 +120,77 @@ async def test_monitor_recovers_after_ai_outage(repo):
     assert bot.send_message.await_count == 1
     await service.monitor()
     assert bot.send_message.await_count == 1
+
+
+@pytest.mark.asyncio
+async def test_due_monitor_favors_applied_channel_and_slows_quiet_one(repo):
+    good = repo.candidate(100, "good_jobs", "Good", "", None, 70, "", [])
+    normal = repo.candidate(200, "normal_jobs", "Normal", "", None, 70, "", [])
+    quiet = repo.candidate(300, "quiet_jobs", "Quiet", "", None, 70, "", [])
+    for channel in (good, normal, quiet):
+        repo.transition_channel(channel.id, "approved")
+    now = datetime.now(timezone.utc)
+    message = repo.save_message(good.id, 1, "Нужен сайт, пишите @customer123", None, now, {})
+    job, _ = repo.attach_job(message)
+    repo.mark_message(message.id, "linked")
+    repo.add_feedback(job.id, "applied")
+    with repo.factory() as db:
+        db.get(Channel, quiet.id).reviewed_at = now - timedelta(days=8)
+        db.commit()
+
+    class Source:
+        def __init__(self):
+            self.seen = []
+
+        async def messages(self, channel, min_id):
+            self.seen.append(channel.username)
+            if False:
+                yield None
+
+    source = Source()
+    service = ScoutService(repo, source, SimpleNamespace(), SimpleNamespace(), 1)
+    await service.monitor()
+    source.seen.clear()
+    with repo.factory() as db:
+        for channel in (good, normal, quiet):
+            db.get(MonitoringState, channel.id).checked_at = now - timedelta(minutes=3)
+        db.commit()
+    intervals = {row["channel"].id: service.channel_interval(row) for row in repo.channel_report()}
+    assert [intervals[channel.id] for channel in (good, normal, quiet)] == [2, 10, 30]
+    await service.monitor_due()
+    assert source.seen == ["good_jobs"]
+    source.seen.clear()
+    with repo.factory() as db:
+        db.get(MonitoringState, normal.id).checked_at = now - timedelta(minutes=11)
+        db.get(MonitoringState, quiet.id).checked_at = now - timedelta(minutes=31)
+        db.commit()
+    await service.monitor_due()
+    assert source.seen == ["normal_jobs", "quiet_jobs"]
+
+
+@pytest.mark.asyncio
+async def test_channel_check_time_records_only_completed_scan(repo):
+    channel = repo.candidate(100, "scoutjobs", "Jobs", "", None, 70, "", [])
+    repo.transition_channel(channel.id, "approved")
+
+    class Source:
+        failed = True
+
+        async def messages(self, channel, min_id):
+            if self.failed:
+                raise ConnectionError("read interrupted")
+            if False:
+                yield None
+
+    source = Source()
+    service = ScoutService(repo, source, SimpleNamespace(), SimpleNamespace(), 1)
+    await service.monitor()
+    with repo.factory() as db:
+        assert db.get(MonitoringState, channel.id).checked_at is None
+    source.failed = False
+    await service.monitor_due()
+    with repo.factory() as db:
+        assert db.get(MonitoringState, channel.id).checked_at is not None
 
 
 @pytest.mark.asyncio

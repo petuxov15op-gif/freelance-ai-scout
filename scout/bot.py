@@ -19,7 +19,7 @@ log = logging.getLogger(__name__)
 
 MENU_SECTIONS = {
     "📋 Заказы": ("latest", "top", "followed"),
-    "📡 Каналы": ("sources", "pending", "discover", "insights", "platforms"),
+    "📡 Каналы": ("sources", "channelstats", "pending", "discover", "insights", "platforms"),
     "📊 Бот": ("status", "check", "today", "stats", "analytics", "settings"),
 }
 MENU_LABELS = {
@@ -27,6 +27,7 @@ MENU_LABELS = {
     "top": "⭐ Лучшие",
     "followed": "👀 Отслеживаемые",
     "sources": "📡 Мои каналы",
+    "channelstats": "📊 По каналам",
     "pending": "🕓 Кандидаты",
     "discover": "🔎 Найти чаты сейчас",
     "platforms": "🏪 Площадки",
@@ -48,6 +49,7 @@ MENU_ACTIONS = {
     "✨ Карточки заказов": "latest",
     "✨ Виджет источников": "sources",
     "📡 Мои каналы": "sources",
+    "📊 По каналам": "channelstats",
     "🕓 Кандидаты": "pending",
     "🔎 Найти чаты сейчас": "discover",
     "🏪 Площадки": "platforms",
@@ -87,6 +89,7 @@ def bot_commands() -> list[BotCommand]:
         ("check", "Проверить работу бота"),
         ("today", "Проверить публикации за сегодня"),
         ("sources", "Отслеживаемые каналы"), ("channels", "Мои каналы"),
+        ("channelstats", "Статистика по каналам"),
         ("pending", "Каналы на подтверждении"), ("add", "Добавить канал"),
         ("latest", "Последние заказы"), ("top", "Лучшие заказы"),
         ("stats", "Статистика"), ("settings", "Настройки"),
@@ -277,6 +280,53 @@ def create_router(service) -> Router:
         else:
             await message.answer(text, reply_markup=keyboard)
 
+    def channel_stats_page(page: int) -> tuple[str, InlineKeyboardMarkup]:
+        def local_time(value) -> str:
+            if value is None:
+                return "нет"
+            value = value if value.tzinfo else value.replace(tzinfo=timezone.utc)
+            return value.astimezone(ZoneInfo("Asia/Yekaterinburg")).strftime("%d.%m %H:%M")
+
+        rows = repo.channel_report()
+        rows.sort(key=lambda row: (row["channel"].status != "approved",
+                                   service.channel_interval(row), -row["positive_30d"],
+                                   -row["alerts"], -row["posts"]))
+        total_pages = max(1, (len(rows) + 7) // 8)
+        page = min(max(page, 1), total_pages)
+        selected = rows[(page - 1) * 8:page * 8]
+        active_rows = [row for row in rows if row["channel"].status == "approved"]
+        totals = (sum(row["posts"] for row in active_rows), sum(row["alerts"] for row in active_rows),
+                  sum(row["applied"] for row in active_rows))
+        lines = [f"📊 Каналы · 7 дней · {page}/{total_pages}",
+                 f"Отслеживается: {sum(row['channel'].status == 'approved' for row in rows)} из {len(rows)}",
+                 f"Постов: {totals[0]} · карточек: {totals[1]} · твоих откликов: {totals[2]}"]
+        for row in selected:
+            channel = row["channel"]
+            name = f"@{channel.username}" if channel.username else channel.title
+            interval = service.channel_interval(row)
+            frequency = ("пауза" if channel.status != "approved" else
+                         "площадки на паузе" if service.source_paused(channel) else
+                         "30 с" if interval == .5 else f"{int(interval)} мин")
+            lines.append(f"\n{name} · {frequency}\n"
+                         f"Постов {row['posts']} · карточек {row['alerts']} · не подошло {row['rejected']} · откликов {row['applied']} · "
+                         f"ответов {row['replied']} · интересно {row['liked']} · сохранено {row['saved']}\n"
+                         f"Последний пост: {local_time(row['last_post'])} · проверен: {local_time(row['checked_at'])} (Екб)")
+        navigation = []
+        if page > 1:
+            navigation.append(InlineKeyboardButton(text="⬅️ Назад", callback_data=f"channelstats:{page - 1}"))
+        if page < total_pages:
+            navigation.append(InlineKeyboardButton(text="➡️ Далее", callback_data=f"channelstats:{page + 1}"))
+        keyboard = [navigation] if navigation else []
+        keyboard.append([InlineKeyboardButton(text="📡 Мои каналы", callback_data="menu:sources")])
+        return "\n".join(lines), InlineKeyboardMarkup(inline_keyboard=keyboard)
+
+    async def show_channel_stats(message: Message, page: int = 1, edit: bool = False) -> None:
+        text, keyboard = channel_stats_page(page)
+        if edit:
+            await message.edit_text(text, reply_markup=keyboard)
+        else:
+            await message.answer(text, reply_markup=keyboard)
+
     def resolve_channel(target: str, user_id: int, enabled: bool) -> list:
         channels = [channel for channel in repo.monitored_channels()
                     if channel.status == ("paused" if enabled else "approved")]
@@ -384,7 +434,8 @@ def create_router(service) -> Router:
     @router.message(Command("status"))
     async def status(message: Message):
         stats = repo.stats()
-        monitoring = "на паузе" if repo.setting("monitoring_paused", "false") == "true" else "каждые 10 минут"
+        monitoring = ("на паузе" if repo.setting("monitoring_paused", "false") == "true" else
+                      "по результатам: 2–30 минут; @program_job каждые 30 секунд")
         telegram_status = "подключён" if service.source.client.is_connected() else "отключён"
         provider_status = (f"OpenRouter: {service.ai.last_status}, модель {service.ai.model}, учтено сегодня ${repo.cost_today():.4f}"
                            if service.ai.provider == "openrouter" else
@@ -426,6 +477,10 @@ def create_router(service) -> Router:
         except ValueError:
             page = 1
         await show_channels(message, page=page, user_id=message.from_user.id if message.from_user else None)
+
+    @router.message(Command("channelstats"))
+    async def channelstats(message: Message):
+        await show_channel_stats(message)
 
     @router.message(Command("platforms"))
     async def platforms(message: Message):
@@ -596,7 +651,7 @@ def create_router(service) -> Router:
         if action == "add":
             await message.answer("Пришлите @имя канала или ссылку t.me. Можно несколько через пробел.")
             return
-        handlers = {"sources": sources, "pending": pending, "platforms": platforms,
+        handlers = {"sources": sources, "channelstats": channelstats, "pending": pending, "platforms": platforms,
                     "latest": latest, "top": top, "followed": followed,
                     "status": status, "check": check, "today": today, "discover": discover,
                     "stats": stats, "analytics": analytics, "insights": insights, "settings": settings}
@@ -658,10 +713,14 @@ def create_router(service) -> Router:
                                         user_id=callback.from_user.id)
                     await callback.answer(result, show_alert=True)
                     return
+            if len(parts) == 2 and parts[0] == "channelstats":
+                await show_channel_stats(callback.message, int(parts[1]), edit=True)
+                await callback.answer()
+                return
             if len(parts) == 2 and parts[0] == "menu" and parts[1] in MENU_LABELS:
                 action = parts[1]
                 await callback.answer()
-                handlers = {"sources": sources, "pending": pending, "platforms": platforms, "latest": latest,
+                handlers = {"sources": sources, "channelstats": channelstats, "pending": pending, "platforms": platforms, "latest": latest,
                             "top": top, "followed": followed,
                             "status": status, "check": check, "today": today,
                             "discover": discover, "stats": stats, "analytics": analytics,

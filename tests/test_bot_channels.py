@@ -25,8 +25,8 @@ def test_main_menu_groups_every_action_and_telegram_command_menu():
     assert labels == ["📋 Заказы", "📡 Каналы", "📡 Мои каналы", "➕ Добавить канал", "📊 Бот"]
     assert {action for actions in MENU_SECTIONS.values() for action in actions} == set(MENU_LABELS)
     assert [[button.text for button in row] for row in section_menu("📡 Каналы").keyboard] == [
-        ["📡 Мои каналы", "🕓 Кандидаты"], ["🔎 Найти чаты сейчас", "📡 Эффективность поиска"],
-        ["🏪 Площадки"], ["← Назад"]
+        ["📡 Мои каналы", "📊 По каналам"], ["🕓 Кандидаты", "🔎 Найти чаты сейчас"],
+        ["📡 Эффективность поиска", "🏪 Площадки"], ["← Назад"]
     ]
     assert main_menu().is_persistent is True
     assert {command.command for command in bot_commands()} >= {"menu", "sources", "channels", "add", "settings"}
@@ -39,6 +39,27 @@ def test_main_menu_groups_every_action_and_telegram_command_menu():
     assert all("✨" not in label for label in MENU_LABELS.values())
     assert {MENU_ACTIONS[label] for label in ("✨ Панель", "✨ Карточки заказов", "✨ Виджет источников")} == {
         "status", "latest", "sources"}
+
+
+@pytest.mark.asyncio
+async def test_channel_stats_menu_pages_cover_every_monitored_channel(repo):
+    for index in range(9):
+        channel = repo.candidate(100 + index, f"stats_{index:05d}", f"Stats {index}", "", None, 70, "", [])
+        repo.transition_channel(channel.id, "approved")
+    service = ScoutService(repo, SimpleNamespace(), SimpleNamespace(), SimpleNamespace(), 1)
+    router = create_router(service)
+    menu_handler = next(item.callback for item in router.message.handlers if item.callback.__name__ == "menu_action")
+    message = SimpleNamespace(text="📊 По каналам", from_user=SimpleNamespace(id=1), answer=AsyncMock())
+    await menu_handler(message)
+    text = message.answer.await_args.args[0]
+    assert "1/2" in text and "Отслеживается: 9 из 9" in text
+    assert text.count("Последний пост:") == 8
+    assert message.answer.await_args.kwargs["reply_markup"].inline_keyboard[0][0].callback_data == "channelstats:2"
+    callback = SimpleNamespace(data="channelstats:2", from_user=SimpleNamespace(id=1),
+                               message=SimpleNamespace(edit_text=AsyncMock()), answer=AsyncMock())
+    await router.callback_query.handlers[0].callback(callback)
+    assert "2/2" in callback.message.edit_text.await_args.args[0]
+    assert "@stats_00008" in callback.message.edit_text.await_args.args[0]
 
 
 @pytest.mark.asyncio

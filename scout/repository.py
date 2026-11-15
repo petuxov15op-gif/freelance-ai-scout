@@ -116,7 +116,6 @@ class Repository:
                     db.add(state)
                 elif latest_cursor > state.last_message_id:
                     state.last_message_id = latest_cursor
-                    state.checked_at = utcnow()
             else:
                 db.execute(update(Message).where(Message.channel_id == channel_id, Message.status == "pending")
                            .values(status="irrelevant", rejection_reason="channel_paused"))
@@ -133,6 +132,11 @@ class Repository:
             state = db.get(MonitoringState, channel_id)
             if state and message_id > state.last_message_id:
                 state.last_message_id = message_id
+
+    def mark_channel_checked(self, channel_id: int) -> None:
+        with transaction(self.factory) as db:
+            state = db.get(MonitoringState, channel_id)
+            if state:
                 state.checked_at = utcnow()
 
     def save_message(self, channel_id: int, telegram_message_id: int, text: str, link: str | None,
@@ -149,7 +153,6 @@ class Repository:
             state = db.get(MonitoringState, channel_id)
             if advance_cursor and state and telegram_message_id > state.last_message_id:
                 state.last_message_id = telegram_message_id
-                state.checked_at = utcnow()
             return message
 
     def mark_message(self, message_id: int, status: str, reason: str | None = None) -> None:
@@ -474,6 +477,64 @@ class Repository:
                     "pending": db.scalar(select(func.count()).select_from(Channel).where(Channel.status == "pending")),
                     "messages": db.scalar(select(func.count()).select_from(Message)),
                     "jobs": db.scalar(select(func.count()).select_from(Job))}
+
+    def channel_report(self, days: int = 7) -> list[dict]:
+        """Per-channel scans and outcomes; shared jobs belong to their first source."""
+        since = utcnow() - timedelta(days=days)
+        feedback_since = utcnow() - timedelta(days=30)
+        with self.factory() as db:
+            channels = list(db.scalars(select(Channel).where(Channel.status.in_(("approved", "paused"))).order_by(Channel.id)))
+            report = {channel.id: {"channel": channel, "checked_at": None, "posts": 0,
+                                   "last_post": None, "alerts": 0, "rejected": 0, "applied": 0,
+                                   "replied": 0, "liked": 0, "positive_30d": 0, "saved": 0}
+                      for channel in channels}
+            for channel_id, checked_at in db.execute(select(MonitoringState.channel_id, MonitoringState.checked_at)):
+                if channel_id in report:
+                    report[channel_id]["checked_at"] = checked_at
+            for channel_id, count in db.execute(select(Message.channel_id, func.count())
+                                                .where(Message.published_at >= since).group_by(Message.channel_id)):
+                if channel_id in report:
+                    report[channel_id]["posts"] = count
+            for channel_id, last_post in db.execute(select(Message.channel_id, func.max(Message.published_at))
+                                                    .group_by(Message.channel_id)):
+                if channel_id in report:
+                    report[channel_id]["last_post"] = last_post
+            first_source = {}
+            for job_id, channel_id in db.execute(select(JobSource.job_id, Message.channel_id)
+                                                 .join(Message, Message.id == JobSource.message_id)
+                                                 .order_by(JobSource.job_id, JobSource.message_id)):
+                first_source.setdefault(job_id, channel_id)
+            jobs = {job.id: job for job in db.scalars(select(Job))}
+            for job_id, in db.execute(select(Notification.job_id).where(
+                    Notification.kind == "instant", Notification.sent_at >= since)):
+                channel_id = first_source.get(job_id)
+                if channel_id in report:
+                    report[channel_id]["alerts"] += 1
+                    if jobs[job_id].status == "irrelevant":
+                        report[channel_id]["rejected"] += 1
+            actions = {channel.id: {"applied": set(), "replied": set(), "liked": set(),
+                                    "positive_30d": set()} for channel in channels}
+            positive = {"interesting", "applied", "replied", "negotiating", "won"}
+            for job_id, action, created_at in db.execute(select(Feedback.job_id, Feedback.action, Feedback.created_at)
+                                                         .where(Feedback.created_at >= feedback_since)):
+                channel_id = first_source.get(job_id)
+                if channel_id not in actions:
+                    continue
+                if action in positive and jobs[job_id].status in positive:
+                    actions[channel_id]["positive_30d"].add(job_id)
+                when = created_at if created_at.tzinfo else created_at.replace(tzinfo=timezone.utc)
+                if when >= since:
+                    field = "liked" if action == "interesting" else action
+                    if field in {"applied", "replied", "liked"}:
+                        actions[channel_id][field].add(job_id)
+            for job_id, job in jobs.items():
+                channel_id = first_source.get(job_id)
+                if channel_id in report and job.saved and job.status != "irrelevant":
+                    report[channel_id]["saved"] += 1
+            for channel_id, values in actions.items():
+                for field, ids in values.items():
+                    report[channel_id][field] = len(ids)
+            return list(report.values())
 
     def health_activity(self) -> dict:
         since = utcnow() - timedelta(hours=24)

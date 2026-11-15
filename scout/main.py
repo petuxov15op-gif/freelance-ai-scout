@@ -48,8 +48,7 @@ async def run() -> None:
     dispatcher = Dispatcher()
     dispatcher.include_router(create_router(service))
     scheduler = AsyncIOScheduler(timezone=ZoneInfo("Asia/Yekaterinburg"))
-    scheduler.add_job(service.monitor, "interval", minutes=10, id="monitor", max_instances=1, coalesce=True)
-    scheduler.add_job(service.monitor_kwork, "interval", minutes=2, id="monitor_kwork", max_instances=1, coalesce=True)
+    scheduler.add_job(service.monitor_due, "interval", minutes=1, id="monitor", max_instances=1, coalesce=True)
     initial_monitor = None
     priority_task = None
     discovery_task = None
@@ -111,7 +110,7 @@ async def run() -> None:
         initial_monitor = asyncio.create_task(service.monitor())
         if config.discovery_enabled:
             discovery_task = asyncio.create_task(discovery_loop())
-        logging.info("Мониторинг каждые 10 минут; автоматический поиск чатов: %s", config.discovery_enabled)
+        logging.info("Мониторинг с частотой по результатам каналов; автоматический поиск чатов: %s", config.discovery_enabled)
 
     try:
         if config.miniapp_enabled:
