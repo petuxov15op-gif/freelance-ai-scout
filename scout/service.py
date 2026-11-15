@@ -12,7 +12,7 @@ from telethon.errors import FloodWaitError, RPCError
 
 from .core import (clear_direct_it_request, contact_options, employment_type, explicit_it_task, high_risk_role,
                    kwork_excluded, kwork_project_url, office_required,
-                   likely_job, mentions_platform, potential_job, similar, synthetic_contact)
+                   likely_job, mentions_platform, potential_job, similar)
 from .models import Channel
 from .repository import Repository
 from .telegram import chat_search_term
@@ -537,8 +537,6 @@ class ScoutService:
                                           channel.username if channel else None,
                                           (message.metadata_json or {}).get("author_username"))
                 reason = ("source_paused" if self.source_paused(channel) else
-                          "synthetic_contact" if (channel.username or "").lower() == "program_job"
-                          and synthetic_contact(message.text) else
                           "kwork_excluded" if self.kwork_post(channel, message) and kwork_excluded(message.text) else
                           "not_job" if not potential_job(message.text) else
                           "no_it_signal" if not explicit_it_task(message.text) else
@@ -557,9 +555,9 @@ class ScoutService:
                         await self.notify_job(existing.id, "instant")
                     self.repo.mark_message(message.id, "linked")
                     continue
+                priority = (channel.username or "").lower() == PRIORITY_CHANNEL
                 pre = await self.ai.ask("kwork_prefilter" if self.kwork_post(channel, message) else "prefilter", message.text)
-                direct_request = (not self.kwork_post(channel, message) and
-                                  not pre["is_job"] and
+                direct_request = (priority and
                                   clear_direct_it_request(message.text, contact["status"], employment))
                 if not (pre["is_job"] and pre["codex_feasible"] and pre["is_it"]) and not direct_request:
                     reason = "ai_not_job" if not pre["is_job"] else "ai_not_feasible" if not pre["codex_feasible"] else "ai_not_it"
@@ -569,7 +567,6 @@ class ScoutService:
                 if not created and self.repo.analysis(job.id):
                     self.repo.mark_message(message.id, "linked")
                     continue
-                priority = (channel.username or "").lower() == PRIORITY_CHANNEL
                 prepare_draft = priority and contact["status"] in {"direct_free", "platform_free"}
                 if prepare_draft:
                     deep, draft = await asyncio.gather(self.ai.ask("deep", message.text),

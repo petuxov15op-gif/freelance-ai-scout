@@ -235,15 +235,16 @@ async def test_suitable_job_is_sent_without_score_threshold(repo):
 
 
 @pytest.mark.asyncio
-async def test_direct_site_request_survives_ai_false_negative_and_synthetic_contacts_do_not(repo):
+async def test_direct_site_request_survives_ai_false_negative_and_synthetic_contacts_are_warned(repo):
     channel = repo.candidate(100, "program_job", "IT заказы", "", None, 70, "", [])
     repo.transition_channel(channel.id, "approved")
 
     class Source(FakeSource):
         async def messages(self, channel, min_id):
             posts = (
-                "Нужен разработчик для интеграции ИИ агента с Tilda API. Бюджет 30 т.р. Пишите в лс.\nКонтакты: @anna_smith_42",
-                "Нужен разработчик для интеграции ИИ-агента с Tilda API. Бюджет 30 т.р. Пишите в личку.\nКонтакты: @jane_smith_43",
+                "Нужен создатель сайтов на задачу за 80 т.р., кому интересно пишите в лс скину где заказ\nКонтакты: @kara_greer_43",
+                "Нужен создатель сайтов на Тильде для переноса и доработки лендинга с Figma бюджет 80 т.р. Нужно собрать страницу по макету, настроить анимации и формы, адаптив под мобильные. Срок около недели. По всем вопросам к @tamsin_ramsey_82\nКонтакты: @charlotte_atherley_95",
+                "Нужен верстальщик на сайт бюджет 30 т.р. пишите в лс скину где заказ\nКонтакты: @taylor_justin_43",
                 "Ищу человека кто сможет сделать сайт на Тильде и затем дать доступ для дальнейших поправок\nКонтакты: @client55555",
             )
             for number, body in enumerate(posts, 1):
@@ -253,18 +254,20 @@ async def test_direct_site_request_survives_ai_false_negative_and_synthetic_cont
     class RejectingAI(FakeAI):
         async def ask(self, kind, text):
             if kind == "prefilter":
-                return {"is_job": False, "is_it": False, "codex_feasible": False}
+                return {"is_job": "Figma" in text, "is_it": False, "codex_feasible": False}
             return await super().ask(kind, text)
 
     bot = SimpleNamespace(send_message=AsyncMock(return_value=SimpleNamespace(message_id=42)))
     service = ScoutService(repo, Source(), RejectingAI(), bot, 1)
     await service.monitor()
-    assert repo.stats()["jobs"] == 1
-    assert bot.send_message.await_count == 1
-    assert repo.jobs()[0].contact_status == "direct_free"
+    assert repo.stats()["jobs"] == 4
+    assert bot.send_message.await_count == 4
+    assert all(job.contact_status == "direct_free" for job in repo.jobs())
+    assert all("⚠️ Контакт похож" in call.args[1] for call in bot.send_message.await_args_list[:3])
+    assert "⚠️ Контакт похож" not in bot.send_message.await_args_list[3].args[1]
     assert [(item.status, item.rejection_reason) for item in repo.pending_messages()] == []
     await service.monitor()
-    assert bot.send_message.await_count == 1
+    assert bot.send_message.await_count == 4
 
 
 @pytest.mark.asyncio

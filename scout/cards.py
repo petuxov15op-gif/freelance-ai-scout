@@ -7,6 +7,7 @@ from html import escape
 from aiogram.exceptions import TelegramBadRequest
 from aiogram.types import BufferedInputFile, CopyTextButton, InlineKeyboardButton, InlineKeyboardMarkup, LinkPreviewOptions
 
+from .core import synthetic_contact
 from .service import CONTACT_LABELS, JOB_STATUS_LABELS, PRIORITY_CHANNEL
 
 log = logging.getLogger(__name__)
@@ -68,6 +69,10 @@ def card_text(repo, job_id, view="home", notice="", sample=False, quick_draft=No
     data = analysis.result if analysis else {}
     heading = "🧪 Тест карточки · сохранённый заказ" if sample else "📋 Заказ"
     parts = [f"{heading} #{job.id}", f"<b>{safe(data.get('title') or job.title or 'Без названия', 180)}</b>"]
+    source = repo.job_message(job_id)
+    channel = repo.job_channel(job_id)
+    if channel and (channel.username or "").lower() == PRIORITY_CHANNEL and source and synthetic_contact(source.text):
+        parts.append("⚠️ Контакт похож на шаблонные объявления этого канала. Подлинность заказа не проверена — уточни детали перед откликом.")
     requirements = data.get("requirements") or []
     if requirements:
         parts.append(safe(" · ".join(requirements[:4]), 350))
