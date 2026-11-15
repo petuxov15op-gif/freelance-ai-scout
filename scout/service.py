@@ -34,6 +34,9 @@ EMPLOYMENT_LABELS = {"one_time_project": "Разовый заказ", "recurring
                      "part_time_role": "Частичная занятость", "full_time_role": "Полная занятость"}
 CONTACT_LABELS = {"direct_free": "Бесплатный", "platform_free": "Бесплатный",
                   "paid": "Платный", "unknown": "Не подтверждено", "none": "Не подтверждено"}
+PRIORITY_CHANNEL = "program_job"
+FALLBACK_DRAFT = ("Здравствуйте! Меня заинтересовал ваш проект. Пришлите, пожалуйста, описание задачи "
+                  "и материалы — после просмотра предложу сроки и стоимость.")
 
 DISCOVERY_QUERIES = (
     "нужен разработчик", "нужно разработать", "ищу программиста", "заказ на разработку",
@@ -381,8 +384,24 @@ class ScoutService:
     async def monitor_kwork(self) -> None:
         await self.monitor(kwork_only=True)
 
+    async def monitor_priority(self) -> None:
+        if self.repo.setting("monitoring_paused", "false") == "true":
+            return
+        async with self.monitor_lock:
+            channel = next((item for item in self.repo.list_channels("approved")
+                            if (item.username or "").lower() == PRIORITY_CHANNEL), None)
+            if channel is None or self.source_paused(channel):
+                return
+            try:
+                async for item in self.source.messages(channel, self.repo.cursor(channel.id)):
+                    self._save_item(channel, item)
+                    await self.process_pending(channel_id=channel.id)
+                await self.process_pending(channel_id=channel.id)
+            except Exception:
+                log.exception("Быстрая проверка @%s прервана; повторим позже", PRIORITY_CHANNEL)
+
     async def monitor(self, kwork_only: bool = False) -> None:
-        if self.monitor_lock.locked() or self.repo.setting("monitoring_paused", "false") == "true":
+        if self.repo.setting("monitoring_paused", "false") == "true":
             return
         async with self.monitor_lock:
             self.last_monitor_started = datetime.now(timezone.utc)
@@ -392,6 +411,8 @@ class ScoutService:
                 channels = [channel for channel in channels if not self.source_paused(channel)]
                 if kwork_only:
                     channels = [channel for channel in channels if self.kwork_source(channel)]
+                else:
+                    channels.sort(key=lambda channel: (channel.username or "").lower() != PRIORITY_CHANNEL)
                 log.info("Мониторинг начат: одобренных каналов %s", len(channels))
                 for channel in channels:
                     if self.repo.setting("monitoring_paused", "false") == "true":
@@ -400,6 +421,8 @@ class ScoutService:
                         async for item in self.source.messages(channel, self.repo.cursor(channel.id)):
                             self._save_item(channel, item)
                             await asyncio.sleep(.3)
+                        if (channel.username or "").lower() == PRIORITY_CHANNEL:
+                            await self.process_pending(channel_id=channel.id)
                     except Exception as exc:
                         self.last_monitor_errors.append(f"@{channel.username or channel.id}: {type(exc).__name__}")
                         log.exception("Мониторинг канала %s прерван, курсор сохранён", channel.title)
@@ -467,9 +490,9 @@ class ScoutService:
             finally:
                 self.last_monitor_finished = datetime.now(timezone.utc)
 
-    async def process_pending(self, limit: int | None = 500) -> None:
+    async def process_pending(self, limit: int | None = 500, channel_id: int | None = None) -> None:
         self.repo.recover_stale_notifications()
-        for message in self.repo.pending_messages(limit=limit):
+        for message in self.repo.pending_messages(limit=limit, channel_id=channel_id):
             try:
                 channel = self.repo.get_channel(message.channel_id)
                 if channel is None or channel.status != "approved":
@@ -511,8 +534,21 @@ class ScoutService:
                 if not created and self.repo.analysis(job.id):
                     self.repo.mark_message(message.id, "linked")
                     continue
-                deep = await self.ai.ask("deep", message.text)
+                priority = (channel.username or "").lower() == PRIORITY_CHANNEL
+                prepare_draft = priority and contact["status"] in {"direct_free", "platform_free"}
+                if prepare_draft:
+                    deep, draft = await asyncio.gather(self.ai.ask("deep", message.text),
+                                                       self.ai.ask("draft", message.text), return_exceptions=True)
+                    if isinstance(deep, Exception):
+                        raise deep
+                else:
+                    deep, draft = await self.ai.ask("deep", message.text), None
                 self.repo.save_analysis(job.id, "deep", self.ai.model, deep)
+                if prepare_draft and isinstance(draft, dict) and isinstance(draft.get("draft"), str) and draft["draft"].strip():
+                    self.repo.save_analysis(job.id, "draft_saved", "owner", draft)
+                elif prepare_draft:
+                    log.warning("Отклик для заказа %s не подготовлен ИИ; используем короткий запасной вариант", job.id)
+                    self.repo.save_analysis(job.id, "draft_saved", "owner", {"draft": FALLBACK_DRAFT})
                 self.repo.set_job_details(job.id, employment, contact)
                 candidate = self.repo.get_candidate(message.channel_id)
                 if candidate and candidate.query:
@@ -522,7 +558,7 @@ class ScoutService:
             except Exception as exc:
                 self.last_monitor_errors.append(f"Обработка объявления: {type(exc).__name__}")
                 log.exception("Обработка объявления %s прервана; повторим позже", message.id)
-        for job in self.repo.pending_instant_jobs(0):
+        for job in self.repo.pending_instant_jobs(0, channel_id=channel_id):
             if self.repo.analysis(job.id):
                 try:
                     await self.notify_job(job.id, "instant")
@@ -548,9 +584,12 @@ class ScoutService:
         if not self.repo.claim_notification(job_id, kind):
             return
         try:
+            saved = self.repo.analysis(job_id, "draft_saved") if (channel.username or "").lower() == PRIORITY_CHANNEL else None
+            quick_draft = saved.result.get("draft") if saved else None
             sent = await self.bot.send_message(
-                self.owner_id, card_text(self.repo, job_id), parse_mode="HTML", link_preview_options=NO_PREVIEW,
-                reply_markup=card_keyboard(job_id, self.repo.job_link(job_id), job.status, job.saved))
+                self.owner_id, card_text(self.repo, job_id, quick_draft=quick_draft), parse_mode="HTML", link_preview_options=NO_PREVIEW,
+                reply_markup=card_keyboard(job_id, self.repo.job_link(job_id), job.status, job.saved,
+                                           quick_draft=quick_draft))
             self.repo.finish_notification(job_id, kind, sent.message_id)
         except Exception:
             self.repo.release_notification(job_id, kind)

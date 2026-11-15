@@ -12,13 +12,14 @@ from aiogram.types import MenuButtonCommands, MenuButtonWebApp, WebAppInfo
 from alembic import command
 from alembic.config import Config as AlembicConfig
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
+from telethon import events, types
 
 from .ai import OpenRouter
 from .bot import bot_commands, create_router
 from .config import Config
 from .db import make_engine, make_session_factory
 from .repository import Repository
-from .service import ScoutService
+from .service import PRIORITY_CHANNEL, ScoutService
 from .telegram import TelegramSource
 from .web import start_web_server
 
@@ -50,11 +51,22 @@ async def run() -> None:
     scheduler.add_job(service.monitor, "interval", minutes=10, id="monitor", max_instances=1, coalesce=True)
     scheduler.add_job(service.monitor_kwork, "interval", minutes=2, id="monitor_kwork", max_instances=1, coalesce=True)
     initial_monitor = None
+    priority_task = None
     discovery_task = None
     web_runner = None
     reader_task = None
     service.source_ready = False
     service.source_error = "Подключаем чтение Telegram"
+    priority_wakeup = asyncio.Event()
+
+    async def priority_loop() -> None:
+        while True:
+            priority_wakeup.clear()
+            await service.monitor_priority()
+            try:
+                await asyncio.wait_for(priority_wakeup.wait(), timeout=30)
+            except asyncio.TimeoutError:
+                pass
 
     async def discovery_loop() -> None:
         while True:
@@ -67,7 +79,7 @@ async def run() -> None:
             await asyncio.sleep(delay)
 
     async def initialize_reader() -> None:
-        nonlocal initial_monitor, discovery_task
+        nonlocal initial_monitor, priority_task, discovery_task
         while True:
             try:
                 await asyncio.wait_for(source.start(), timeout=30)
@@ -84,6 +96,17 @@ async def run() -> None:
                 await asyncio.sleep(60)
         service.source_ready = True
         service.source_error = ""
+        priority_channel = next((channel for channel in repo.monitored_channels()
+                                 if (channel.username or "").lower() == PRIORITY_CHANNEL), None)
+        if priority_channel:
+            async def on_priority_update(event):
+                peer = getattr(event.message, "peer_id", None)
+                if isinstance(peer, types.PeerChannel) and peer.channel_id == priority_channel.telegram_id:
+                    priority_wakeup.set()
+
+            source.client.add_event_handler(on_priority_update, events.NewMessage())
+            priority_task = asyncio.create_task(priority_loop())
+            logging.info("Приоритетный канал @%s: новые сообщения сразу, повторная проверка каждые 30 секунд", PRIORITY_CHANNEL)
         scheduler.start()
         initial_monitor = asyncio.create_task(service.monitor())
         if config.discovery_enabled:
@@ -107,7 +130,7 @@ async def run() -> None:
     finally:
         if web_runner:
             await web_runner.cleanup()
-        for task in (reader_task, initial_monitor, discovery_task):
+        for task in (reader_task, priority_task, initial_monitor, discovery_task):
             if task:
                 task.cancel()
                 with suppress(asyncio.CancelledError):

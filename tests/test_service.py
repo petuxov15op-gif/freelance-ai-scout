@@ -196,6 +196,75 @@ async def test_direct_site_request_survives_ai_false_negative_and_synthetic_cont
 
 
 @pytest.mark.asyncio
+async def test_priority_channel_is_processed_first_and_new_post_gets_ready_reply(repo):
+    other = repo.candidate(100, "other_jobs", "Other", "", None, 70, "", [])
+    priority = repo.candidate(200, "program_job", "Priority", "", None, 70, "", [])
+    repo.transition_channel(other.id, "approved")
+    repo.transition_channel(priority.id, "approved")
+    reply = "Здравствуйте! Сделаю сайт на Тильде и передам доступ. Пришлите, пожалуйста, описание страниц для оценки сроков и стоимости."
+
+    class Source(FakeSource):
+        def __init__(self):
+            self.seen = []
+            self.new_post = False
+
+        async def messages(self, channel, min_id):
+            self.seen.append(channel.username)
+            if min_id < 1:
+                body = ("Ищу человека кто сможет сделать сайт на Тильде. Контакты: @client55555"
+                        if channel.username == "program_job" else
+                        "Нужен Python бот для заявок. Пишите @other55555")
+                yield SimpleNamespace(id=1, raw_text=body, date=datetime.now(timezone.utc),
+                                      media=None, fwd_from=None)
+            if self.new_post and channel.username == "program_job" and min_id < 2:
+                yield SimpleNamespace(id=2, raw_text="Нужен сайт для кафе. Пишите @cafe55555",
+                                      date=datetime.now(timezone.utc), media=None, fwd_from=None)
+
+    class ReplyAI(FakeAI):
+        async def ask(self, kind, text):
+            if kind == "draft":
+                return {"draft": reply, "case_id": None}
+            return await super().ask(kind, text)
+
+    source = Source()
+    bot = SimpleNamespace(send_message=AsyncMock(side_effect=(SimpleNamespace(message_id=42),
+                                                              SimpleNamespace(message_id=43),
+                                                              SimpleNamespace(message_id=44))))
+    service = ScoutService(repo, source, ReplyAI(), bot, 1)
+    await service.monitor()
+    assert source.seen[:2] == ["program_job", "other_jobs"]
+    first = bot.send_message.await_args_list[0]
+    assert first.args[0] == 1 and "Готовый отклик" in first.args[1] and reply in first.args[1]
+    assert first.kwargs["reply_markup"].inline_keyboard[0][0].copy_text.text == reply
+    source.seen.clear()
+    source.new_post = True
+    await service.monitor_priority()
+    assert source.seen == ["program_job"]
+    assert bot.send_message.await_count == 3
+    await service.monitor_priority()
+    assert bot.send_message.await_count == 3
+
+
+@pytest.mark.asyncio
+async def test_priority_order_has_fallback_reply_when_generation_fails(repo):
+    channel = repo.candidate(200, "program_job", "Priority", "", None, 70, "", [])
+    repo.transition_channel(channel.id, "approved")
+
+    class FailingDraftAI(FakeAI):
+        async def ask(self, kind, text):
+            if kind == "draft":
+                raise RuntimeError("Draft unavailable")
+            return await super().ask(kind, text)
+
+    bot = SimpleNamespace(send_message=AsyncMock(return_value=SimpleNamespace(message_id=42)))
+    service = ScoutService(repo, FakeSource(), FailingDraftAI(), bot, 1)
+    await service.monitor_priority()
+    bot.send_message.assert_awaited_once()
+    assert "Готовый отклик" in bot.send_message.await_args.args[1]
+    assert "описание задачи" in bot.send_message.await_args.args[1]
+
+
+@pytest.mark.asyncio
 async def test_generic_remote_job_is_not_sent(repo):
     channel = repo.candidate(100, "scoutjobs", "Jobs", "", None, 70, "", [])
     repo.transition_channel(channel.id, "approved")

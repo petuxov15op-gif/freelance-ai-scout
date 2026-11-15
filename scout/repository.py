@@ -158,9 +158,11 @@ class Repository:
             message.status = status
             message.rejection_reason = reason
 
-    def pending_messages(self, limit: int | None = 500) -> list[Message]:
+    def pending_messages(self, limit: int | None = 500, channel_id: int | None = None) -> list[Message]:
         with self.factory() as db:
             query = select(Message).where(Message.status == "pending").order_by(Message.id)
+            if channel_id is not None:
+                query = query.where(Message.channel_id == channel_id)
             return list(db.scalars(query.limit(limit) if limit is not None else query))
 
     def previously_irrelevant(self, message: Message) -> bool:
@@ -276,11 +278,15 @@ class Repository:
             if job:
                 job.saved = following
 
-    def pending_instant_jobs(self, minimum_score: int) -> list[Job]:
+    def pending_instant_jobs(self, minimum_score: int, channel_id: int | None = None) -> list[Job]:
         started_at = datetime.fromisoformat(self.setting("instant_notifications_start_at"))
         with self.factory() as db:
-            return list(db.scalars(select(Job).where(Job.score >= minimum_score, Job.created_at >= started_at,
-                     ~Job.id.in_(select(Notification.job_id).where(Notification.kind == "instant"))).limit(100)))
+            query = select(Job).where(Job.score >= minimum_score, Job.created_at >= started_at,
+                                      ~Job.id.in_(select(Notification.job_id).where(Notification.kind == "instant")))
+            if channel_id is not None:
+                source_jobs = select(JobSource.job_id).join(Message).where(Message.channel_id == channel_id)
+                query = query.where(Job.id.in_(source_jobs))
+            return list(db.scalars(query.limit(100)))
 
     def today_unsent_job_ids(self, since: datetime) -> list[int]:
         with self.factory() as db:

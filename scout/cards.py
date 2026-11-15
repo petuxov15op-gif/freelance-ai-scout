@@ -5,9 +5,9 @@ import logging
 from html import escape
 
 from aiogram.exceptions import TelegramBadRequest
-from aiogram.types import BufferedInputFile, InlineKeyboardButton, InlineKeyboardMarkup, LinkPreviewOptions
+from aiogram.types import BufferedInputFile, CopyTextButton, InlineKeyboardButton, InlineKeyboardMarkup, LinkPreviewOptions
 
-from .service import CONTACT_LABELS, JOB_STATUS_LABELS
+from .service import CONTACT_LABELS, JOB_STATUS_LABELS, PRIORITY_CHANNEL
 
 log = logging.getLogger(__name__)
 NO_PREVIEW = LinkPreviewOptions(is_disabled=True)
@@ -18,7 +18,7 @@ def safe(value, limit=300):
     return escape(text[:limit] + ("…" if len(text) > limit else ""))
 
 
-def card_keyboard(job_id, link=None, status="new", following=False, view="home"):
+def card_keyboard(job_id, link=None, status="new", following=False, view="home", quick_draft=None):
     def button(text, action):
         return InlineKeyboardButton(text=text, callback_data=f"card:{action}:{job_id}")
 
@@ -52,10 +52,14 @@ def card_keyboard(job_id, link=None, status="new", following=False, view="home")
                                           callback_data=f"feedback:{'new' if status == 'irrelevant' else 'irrelevant'}:{job_id}")],
             [button("📌 Статус", "statuses"), button("📝 Заметка / цена", "notes")],
         ]
+        if quick_draft:
+            copy = (InlineKeyboardButton(text="📋 Скопировать отклик", copy_text=CopyTextButton(text=quick_draft))
+                    if len(quick_draft) <= 256 else button("📋 Открыть отклик", "copy_draft"))
+            rows.insert(0, [copy])
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
-def card_text(repo, job_id, view="home", notice="", sample=False):
+def card_text(repo, job_id, view="home", notice="", sample=False, quick_draft=None):
     if view == "copy":
         saved = repo.analysis(job_id, "draft_saved")
         return escape(saved.result.get("draft", "") if saved else "")
@@ -81,6 +85,8 @@ def card_text(repo, job_id, view="home", notice="", sample=False):
     if view == "home":
         if job.contact_url and job.contact_status in {"direct_free", "platform_free"}:
             parts.append(f"Контакт: {safe(job.contact_url, 250)}")
+        if quick_draft:
+            parts.append("<b>Готовый отклик</b>\n" + safe(quick_draft, 500))
         if job.amount:
             parts.append(f"<b>Моя цена:</b> {safe(job.amount, 100)}")
         if job.note:
@@ -123,10 +129,14 @@ class OrderCards:
     async def show(self, message, job_id, view="home", notice=""):
         job = self.repo.job(job_id)
         sample = (getattr(message, "text", "") or "").startswith("🧪")
+        channel = self.repo.job_channel(job_id)
+        saved = self.repo.analysis(job_id, "draft_saved") if channel and (channel.username or "").lower() == PRIORITY_CHANNEL else None
+        quick_draft = saved.result.get("draft") if saved else None
         try:
-            await message.edit_text(card_text(self.repo, job_id, view, notice, sample), parse_mode="HTML",
+            await message.edit_text(card_text(self.repo, job_id, view, notice, sample, quick_draft), parse_mode="HTML",
                                     link_preview_options=NO_PREVIEW,
-                                    reply_markup=card_keyboard(job_id, self.repo.job_link(job_id), job.status, job.saved, view))
+                                    reply_markup=card_keyboard(job_id, self.repo.job_link(job_id), job.status, job.saved,
+                                                               view, quick_draft))
         except TelegramBadRequest as exc:
             if "message is not modified" not in str(exc).lower():
                 raise
