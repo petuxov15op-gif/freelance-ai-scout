@@ -10,7 +10,7 @@ from aiogram import Bot
 from telethon import types
 from telethon.errors import FloodWaitError, RPCError
 
-from .core import (clear_direct_it_request, contact_options, employment_type, explicit_it_task, high_risk_role,
+from .core import (beginner_ai_role, clear_direct_it_request, contact_options, employment_type, explicit_it_task, high_risk_role,
                    kwork_excluded, kwork_project_url, office_required,
                    likely_job, mentions_platform, potential_job, similar)
 from .models import Channel
@@ -54,10 +54,14 @@ DISCOVERY_GROUPS = {
                      "регулярные задачи python", "технический специалист проект"),
     "english": ("looking for developer", "need python developer", "freelance automation",
                 "telegram bot developer", "part time developer", "api integration project"),
+    "vibe_work": ("вайбкодер", "ищем вайбкодера", "вайбкодинг подработка", "разработка через Cursor",
+                  "разработка с Codex", "AI разработчик без опыта", "начинающий AI специалист",
+                  "AI специалист неполный день", "вайбкодер проектная работа", "junior AI developer part time"),
 }
 DEVELOPMENT_TASK = re.compile(
     r"\b(?:разработ|программ|сайт|лендинг|верстк|бот\b|автоматизац|интеграц|парсинг|"
-    r"скрипт|приложен|crm\b|api\b|python\b|frontend\b|backend\b|wordpress\b|tilda\b)",
+    r"скрипт|приложен|crm\b|api\b|python\b|frontend\b|backend\b|wordpress\b|tilda\b|"
+    r"вайбкод|vibecod|codex\b|cursor\b|ai\s+специалист|ai\s+developer)",
     re.IGNORECASE,
 )
 PAUSED_PLATFORM_SOURCES = {
@@ -252,19 +256,39 @@ class ScoutService:
             enabled_groups = {group for group in DISCOVERY_GROUPS
                               if self.repo.setting("search_group_" + group, "true") == "true"}
             query_rows = self.repo.search_queries(enabled_groups)
-            # A fifth of each batch explores less tried phrases. All enabled queries remain eligible.
-            ranked = sorted(query_rows, key=lambda row: (row.new_sources + row.suitable_jobs * 2 + row.applications * 3 + row.replies * 4) / (row.searches + 1), reverse=True)
-            explored = sorted(query_rows, key=lambda row: row.searches)
-            order = []
-            for position in range(len(query_rows)):
-                pool = explored if position % 5 == 4 else ranked
-                row = next((item for item in pool if item.phrase not in order), None)
-                if row:
-                    order.append(row.phrase)
-            start = int(self.repo.setting("discovery_query_index", "0")) % len(order) if order else 0
-            for offset in range(len(order)):
-                index = (start + offset) % len(order)
-                query = order[index]
+            # Alternate the existing and vibe-work tracks while keeping all enabled phrases eligible.
+            def ranked_phrases(rows):
+                ranked = sorted(rows, key=lambda row: (row.new_sources + row.suitable_jobs * 2 + row.applications * 3 + row.replies * 4) / (row.searches + 1), reverse=True)
+                explored = sorted(rows, key=lambda row: row.searches)
+                result = []
+                for position in range(len(rows)):
+                    pool = explored if position % 5 == 4 else ranked
+                    row = next((item for item in pool if item.phrase not in result), None)
+                    if row:
+                        result.append(row.phrase)
+                return result
+
+            tracks = {
+                "regular": ranked_phrases([row for row in query_rows if row.group != "vibe_work"]),
+                "vibe": ranked_phrases([row for row in query_rows if row.group == "vibe_work"]),
+            }
+            positions = {name: int(self.repo.setting("discovery_" + name + "_index", "0")) % len(phrases)
+                         for name, phrases in tracks.items() if phrases}
+            remaining = {name: len(phrases) for name, phrases in tracks.items()}
+            turn = self.repo.setting("discovery_next_track", "regular")
+            while sum(remaining.values()):
+                track = turn if remaining.get(turn) else ("vibe" if turn == "regular" else "regular")
+                index = positions[track]
+                query = tracks[track][index]
+
+                def advance() -> None:
+                    nonlocal turn
+                    positions[track] = (index + 1) % len(tracks[track])
+                    remaining[track] -= 1
+                    turn = "vibe" if track == "regular" else "regular"
+                    self.repo.set_setting("discovery_" + track + "_index", str(positions[track]))
+                    self.repo.set_setting("discovery_next_track", turn)
+
                 try:
                     search_error = None
                     try:
@@ -301,7 +325,7 @@ class ScoutService:
                         search_error = type(exc).__name__
                         log.exception("Поиск публичных чатов по запросу %s не удался", query)
                         chats = []
-                    self.repo.set_setting("discovery_query_index", str((index + 1) % len(order)))
+                    advance()
                     self.repo.record_search(query, searches=1, success=True, error=search_error)
                 except FloodWaitError as exc:
                     wait_until = datetime.now(timezone.utc) + timedelta(seconds=max(exc.seconds, 60))
@@ -318,6 +342,7 @@ class ScoutService:
                     errors += 1
                     self.repo.record_search(query, error="Telegram search error")
                     log.exception("Поиск публикаций по запросу %s не удался", query)
+                    advance()
                     continue
                 for entity, post in [*found, *((chat, None) for chat in chats)]:
                     content = (post.raw_text or "") if post else ""
@@ -327,7 +352,7 @@ class ScoutService:
                     if not self.platforms_enabled() and mentions_platform(entity.title or ""):
                         continue
                     if post and (post.date < datetime.now(timezone.utc) - timedelta(days=3)
-                                 or not likely_job(content) or not DEVELOPMENT_TASK.search(content)):
+                                 or not likely_job(content) or not (DEVELOPMENT_TASK.search(content) or beginner_ai_role(content))):
                         continue
                     if post and any(similar(content, prior) for prior in seen_examples):
                         self.repo.record_search(query, duplicates=1)
@@ -342,7 +367,7 @@ class ScoutService:
                         if not self.platforms_enabled() and mentions_platform(description or ""):
                             continue
                         examples = [text for text in dict.fromkeys([content, *examples])
-                                    if likely_job(text) and DEVELOPMENT_TASK.search(text)]
+                                    if likely_job(text) and (DEVELOPMENT_TASK.search(text) or beginner_ai_role(text))]
                         if examples and any(similar(examples[0], prior) for prior in seen_examples):
                             self.repo.record_search(query, duplicates=1)
                             continue
@@ -361,7 +386,7 @@ class ScoutService:
                         channel = self.repo.candidate(
                             entity.id, entity.username, entity.title, description, query,
                             usefulness,
-                            (f"Недавние IT-заказы: {len(verified)}; чат активен за последние 3 дня; "
+                            (f"Недавние IT-заказы и AI-вакансии: {len(verified)}; чат активен за последние 3 дня; "
                              + ("есть прямой контакт заказчика" if direct else "прямой контакт не указан")
                              + (f"; повторы {getattr(inspection, 'repeat_ratio', 0):.0%}, реклама {ad_ratio:.0%}")), verified,
                         )
@@ -543,7 +568,9 @@ class ScoutService:
                           "requires_verified_expertise" if high_risk_role(message.text) else
                           "office_required" if office_required(message.text) else
                           "category_disabled" if self.repo.setting("employment_" + employment,
-                              "false" if employment == "full_time_role" else "true") != "true" else None)
+                              "false" if employment == "full_time_role" else "true") != "true"
+                              and not (employment == "full_time_role" and beginner_ai_role(message.text)
+                                       and self.repo.setting("employment_beginner_ai_role", "true") == "true") else None)
                 if reason:
                     self.repo.mark_message(message.id, "irrelevant", reason)
                     continue
@@ -607,7 +634,9 @@ class ScoutService:
         if not job or message is None or channel is None or channel.status != "approved" or self.source_paused(channel):
             return
         kwork = self.kwork_post(channel, message)
-        if not allow_unconfirmed and job.contact_status not in {"direct_free", "platform_free"} and not kwork:
+        entry_role_form = (beginner_ai_role(message.text)
+                           and job.contact_status == "unknown" and bool(job.contact_url))
+        if not allow_unconfirmed and job.contact_status not in {"direct_free", "platform_free"} and not kwork and not entry_role_form:
             return
         if kwork and not allow_unconfirmed:
             started = datetime.fromisoformat(self.repo.setting("kwork_auto_start_at"))

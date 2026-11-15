@@ -17,6 +17,7 @@ def test_employment_and_contacts_from_text_and_entities():
     assert employment_type("Регулярные задачи Python для агентства") == "recurring_project"
     assert employment_type("Подработка Python 3 часа в день") == "part_time_role"
     assert employment_type("Вакансия Python в штат") == "full_time_role"
+    assert employment_type("Вакансия AI-специалиста, проектная занятость") == "recurring_project"
     assert high_risk_role("Вакансия Senior DevOps инженера")
     assert not high_risk_role("Нужен Python-бот для кафе")
     assert office_required("Нужен разработчик, работа в офисе")

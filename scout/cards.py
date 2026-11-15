@@ -7,8 +7,8 @@ from html import escape
 from aiogram.exceptions import TelegramBadRequest
 from aiogram.types import BufferedInputFile, CopyTextButton, InlineKeyboardButton, InlineKeyboardMarkup, LinkPreviewOptions
 
-from .core import synthetic_contact
-from .service import CONTACT_LABELS, JOB_STATUS_LABELS, PRIORITY_CHANNEL
+from .core import permanent_role, synthetic_contact
+from .service import CONTACT_LABELS, EMPLOYMENT_LABELS, FALLBACK_DRAFT, JOB_STATUS_LABELS, PRIORITY_CHANNEL
 
 log = logging.getLogger(__name__)
 NO_PREVIEW = LinkPreviewOptions(is_disabled=True)
@@ -67,9 +67,10 @@ def card_text(repo, job_id, view="home", notice="", sample=False, quick_draft=No
     job = repo.job(job_id)
     analysis = repo.analysis(job_id)
     data = analysis.result if analysis else {}
-    heading = "🧪 Тест карточки · сохранённый заказ" if sample else "📋 Заказ"
-    parts = [f"{heading} #{job.id}", f"<b>{safe(data.get('title') or job.title or 'Без названия', 180)}</b>"]
     source = repo.job_message(job_id)
+    role = job.employment_type in {"part_time_role", "full_time_role"} or bool(source and permanent_role(source.text))
+    heading = "🧪 Тест карточки · сохранённый заказ" if sample else "📋 Вакансия" if role else "📋 Заказ"
+    parts = [f"{heading} #{job.id}", f"<b>{safe(data.get('title') or job.title or 'Без названия', 180)}</b>"]
     channel = repo.job_channel(job_id)
     if channel and (channel.username or "").lower() == PRIORITY_CHANNEL and source and synthetic_contact(source.text):
         parts.append("⚠️ Контакт похож на шаблонные объявления этого канала. Подлинность заказа не проверена — уточни детали перед откликом.")
@@ -84,12 +85,15 @@ def card_text(repo, job_id, view="home", notice="", sample=False, quick_draft=No
         budget += " " + currency
     parts.append(f"💰 <b>{safe(budget, 80)}</b>   ·   ⏱ {safe(data.get('deadline') or 'срок не указан', 70)}\n"
                  f"⭐ <b>{job.score if job.score is not None else '—'}/100</b> · ИИ-рейтинг")
+    parts.append("Занятость: " + EMPLOYMENT_LABELS.get(job.employment_type, job.employment_type))
     parts.append(f"{'👀 Отслеживается' if job.saved else 'Не отслеживается'}\n"
                  f"{JOB_STATUS_LABELS.get(job.status, '🆕 Новый')}\n"
                  f"Отклик: {CONTACT_LABELS.get(job.contact_status, 'Не подтверждено')}")
     if view == "home":
         if job.contact_url and job.contact_status in {"direct_free", "platform_free"}:
             parts.append(f"Контакт: {safe(job.contact_url, 250)}")
+        elif role and job.contact_url and job.contact_status == "unknown":
+            parts.append(f"Форма отклика (условия не подтверждены): {safe(job.contact_url, 250)}")
         if quick_draft:
             parts.append("<b>Готовый отклик</b>\n" + safe(quick_draft, 500))
         if job.amount:
@@ -248,7 +252,15 @@ class OrderCards:
                 await self.show(callback.message, job_id, view)
             except Exception:
                 log.exception("Подготовка %s для карточки %s", view, job_id)
-                await self.show(callback.message, job_id, notice="Не удалось получить ответ ИИ. Попробуй ещё раз; остальные кнопки доступны.")
+                if view == "draft":
+                    fallback = ("Здравствуйте! Меня заинтересовала ваша вакансия. Хочу присоединиться к команде "
+                                "и обсудить задачи и график. Готов предоставить портфолио, если вам интересно."
+                                if (job.employment_type in {"part_time_role", "full_time_role"}
+                                    or permanent_role(self.repo.job_original(job_id) or "")) else FALLBACK_DRAFT)
+                    self.repo.save_analysis(job_id, "draft_saved", "owner", {"draft": fallback})
+                    await self.show(callback.message, job_id, "draft", "ИИ сейчас недоступен — сохранил короткий шаблон. Проверь его перед отправкой.")
+                else:
+                    await self.show(callback.message, job_id, notice="Не удалось получить ответ ИИ. Попробуй ещё раз; остальные кнопки доступны.")
             finally:
                 self.generating.discard(job_id)
             return

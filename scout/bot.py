@@ -360,7 +360,7 @@ def create_router(service) -> Router:
         return (f"✅ Мониторинг «{channel.title}» возобновлён." if enabled else
                 f"✅ Канал «{channel.title}» отключён. Новые заказы из него не отслеживаю.")
     def settings_text() -> str:
-        return "Уведомления: подходящие IT-варианты с подтверждённым бесплатным откликом. Выбери категории и группы поиска:"
+        return "Уведомления: подходящие IT-варианты с доступным откликом. Для начальных AI-вакансий форму с неизвестной стоимостью помечаю отдельно. Выбери категории и группы поиска:"
 
     def settings_keyboard() -> InlineKeyboardMarkup:
         rows = []
@@ -368,8 +368,12 @@ def create_router(service) -> Router:
             enabled = repo.setting("employment_" + key, "false" if key == "full_time_role" else "true") == "true"
             rows.append([InlineKeyboardButton(text=("✅ " if enabled else "⬜ ") + label,
                                               callback_data=f"toggle:employment:{key}")])
+        beginner_enabled = repo.setting("employment_beginner_ai_role", "true") == "true"
+        rows.append([InlineKeyboardButton(text=("✅ " if beginner_enabled else "⬜ ") + "Начинающий AI-специалист (штат)",
+                                          callback_data="toggle:employment:beginner_ai_role")])
         for key, label in (("development", "Разработка"), ("telegram_automation", "Telegram и автоматизация"),
-                           ("project_work", "Проектная работа"), ("english", "English")):
+                           ("project_work", "Проектная работа"), ("english", "English"),
+                           ("vibe_work", "Вайбкодинг и AI-вакансии")):
             enabled = repo.setting("search_group_" + key, "true") == "true"
             rows.append([InlineKeyboardButton(text=("✅ " if enabled else "⬜ ") + "Поиск: " + label,
                                               callback_data=f"toggle:search:{key}")])
@@ -729,7 +733,7 @@ def create_router(service) -> Router:
                 return
             if len(parts) == 3 and parts[0] == "toggle":
                 family, key = parts[1:]
-                if family == "employment" and key in EMPLOYMENT_LABELS:
+                if family == "employment" and key in {*EMPLOYMENT_LABELS, "beginner_ai_role"}:
                     setting = "employment_" + key
                 elif family == "search" and key in DISCOVERY_GROUPS:
                     setting = "search_group_" + key

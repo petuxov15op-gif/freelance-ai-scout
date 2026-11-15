@@ -105,7 +105,7 @@ def likely_job(text: str) -> bool:
     normalized = normalize_text(text)
     if not potential_job(text):
         return False
-    terms = ("нужен", "нужна", "нужно", "ищем", "задача", "требуется", "заказ", "бюджет", "оплата",
+    terms = ("нужен", "нужна", "нужно", "ищем", "ищут", "задача", "требуется", "заказ", "вакансия", "бюджет", "оплата",
              "looking for", "need a", "hiring", "project", "budget", "necesitamos", "buscamos",
              "recherche", "cherche un", "suche einen", "suche eine", "precisamos", "procuro")
     return any(term in normalized for term in terms)
@@ -135,7 +135,15 @@ def explicit_it_task(text: str) -> bool:
         "integration", "python", "javascript", "typescript", "react", "django", "fastapi",
         "wordpress", "tilda", "figma", "api", "sql", "1с", "1c",
     )
-    return any(re.search(r"\b" + re.escape(term), normalized) for term in technical_terms)
+    return beginner_ai_role(text) or any(re.search(r"\b" + re.escape(term), normalized) for term in technical_terms)
+
+
+def beginner_ai_role(text: str) -> bool:
+    value = normalize_text(text)
+    beginner = re.search(r"\b(?:без опыта|без коммерческого опыта|начинающ\w*|джун\w*|junior|entry level|стаж[её]р\w*)\b", value)
+    ai_role = (re.search(r"\b(?:ai|ии|нейросет\w*)\s*(?:специалист\w*|разработчик\w*|инженер\w*|кодер\w*)\b", value)
+               or re.search(r"\b(?:вайбкодер\w*|vibe\s*coder\w*)\b", value))
+    return bool(beginner and ai_role)
 
 
 def permanent_role(text: str) -> bool:
@@ -170,6 +178,8 @@ def employment_type(text: str) -> str:
         return "full_time_role"
     if any(term in value for term in ("частичная занятость", "неполная занятость", "неполный день", "part time", "parttime", "часа в день", "часов в неделю", "подработк")) and not any(term in value for term in ("разовая подработка", "разовый заказ")):
         return "part_time_role"
+    if any(term in value for term in ("проектная занятость", "проектная работа", "проектный формат", "project based")):
+        return "recurring_project"
     if any(term in value for term in ("регулярн", "долгосрочн", "на постоянной основе", "постоянные задачи", "retainer")):
         return "recurring_project"
     if permanent_role(text):

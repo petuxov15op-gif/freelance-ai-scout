@@ -178,9 +178,21 @@ async def test_ai_error_keeps_other_buttons_and_retry_available(repo, job):
     tap = callback(job, "draft:{id}")
     cards = OrderCards(service)
     await cards.handle(tap)
-    assert "Не удалось получить ответ ИИ" in tap.message.edit_text.await_args.args[0]
-    assert "Отслеживать заказ" in str(tap.message.edit_text.await_args.kwargs["reply_markup"])
-    assert not cards.generating and repo.analysis(job.id, "draft_saved") is None
+    assert "ИИ сейчас недоступен" in tap.message.edit_text.await_args.args[0]
+    assert "Черновик отклика" in tap.message.edit_text.await_args.args[0]
+    assert not cards.generating and repo.analysis(job.id, "draft_saved") is not None
+
+
+@pytest.mark.asyncio
+async def test_vacancy_draft_has_portfolio_fallback(repo, job):
+    repo.set_job_details(job.id, "part_time_role", {"status": "direct_free", "method": "Telegram", "url": "https://t.me/customer"})
+    service = card_service(repo)
+    service.ai.ask.side_effect = RuntimeError("API unavailable")
+    tap = callback(job, "draft:{id}")
+    await OrderCards(service).handle(tap)
+    draft = repo.analysis(job.id, "draft_saved").result["draft"]
+    assert "Хочу присоединиться" in draft
+    assert "Готов предоставить портфолио" in draft
 
 
 @pytest.mark.asyncio

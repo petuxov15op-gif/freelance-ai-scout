@@ -41,7 +41,8 @@ def parse_public_channel(value: str) -> str:
 def chat_search_term(query: str) -> str:
     """contacts.search matches substrings, not full-text job descriptions."""
     lower = query.lower()
-    for term in ("python", "разработ", "программ", "автоматизац", "интеграц", "telegram",
+    for term in ("вайбкод", "vibecod", "cursor", "codex", "нейросет", "ai", "ии",
+                 "python", "разработ", "программ", "автоматизац", "интеграц", "telegram",
                  "developer", "freelance", "frontend", "backend", "приложен", "сайт", "скрипт",
                  "бот", "crm", "api", "ваканс", "подрядчик"):
         if term in lower:

@@ -427,6 +427,54 @@ async def test_full_time_is_disabled_by_default_even_without_ai_coding(repo):
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("enabled", [True, False])
+async def test_beginner_ai_full_time_role_has_its_own_toggle(repo, enabled):
+    channel = repo.candidate(101, "ai_jobs", "AI Jobs", "", None, 70, "", [])
+    repo.transition_channel(channel.id, "approved")
+
+    class Source(FakeSource):
+        async def messages(self, channel, min_id):
+            if min_id < 1:
+                yield SimpleNamespace(id=1, raw_text=("Вакансия: начинающий AI-специалист в штат, "
+                    "делать Telegram-ботов через Codex. Без опыта. Пишите @client12345"),
+                    date=datetime.now(timezone.utc), media=None, fwd_from=None)
+
+    bot = SimpleNamespace(send_message=AsyncMock(return_value=SimpleNamespace(message_id=42)))
+    service = ScoutService(repo, Source(), FakeAI(), bot, 1)
+    if not enabled:
+        repo.set_setting("employment_beginner_ai_role", "false")
+    await service.monitor()
+    if enabled:
+        bot.send_message.assert_awaited_once()
+        assert "Вакансия" in bot.send_message.await_args.args[1]
+        assert "Полная занятость" in bot.send_message.await_args.args[1]
+    else:
+        bot.send_message.assert_not_awaited()
+    await service.monitor()
+    assert bot.send_message.await_count == int(enabled)
+
+
+@pytest.mark.asyncio
+async def test_beginner_ai_vacancy_with_unconfirmed_application_form_is_labeled(repo):
+    channel = repo.candidate(103, "ai_jobs_form", "AI Jobs", "", None, 70, "", [])
+    repo.transition_channel(channel.id, "approved")
+
+    class Source(FakeSource):
+        async def messages(self, channel, min_id):
+            if min_id < 1:
+                yield SimpleNamespace(id=1, raw_text=("Вакансия: начинающий AI-специалист, неполный день, "
+                    "делать ботов через Codex. Отклик https://example.org/apply"),
+                    date=datetime.now(timezone.utc), media=None, fwd_from=None)
+
+    bot = SimpleNamespace(send_message=AsyncMock(return_value=SimpleNamespace(message_id=42)))
+    service = ScoutService(repo, Source(), FakeAI(), bot, 1)
+    await service.monitor()
+    bot.send_message.assert_awaited_once()
+    assert "Не подтверждено" in bot.send_message.await_args.args[1]
+    assert "Форма отклика (условия не подтверждены)" in bot.send_message.await_args.args[1]
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize("announcement, should_send", [
     ("Подработка: поддерживать Python-бота по 3 часа в день, оплата ежемесячно", True),
     ("Подработка: поддерживать Python-бота по 3 часа в день с помощью Codex, оплата ежемесячно", True),
@@ -875,6 +923,34 @@ async def test_discovery_waits_for_telegrams_quota_reset(repo):
     assert source.searches == 1
     assert (await service.discover())[0] == "wait"
     assert source.searches == 1
+
+
+@pytest.mark.asyncio
+async def test_discovery_balances_tracks_across_quota_resets(repo):
+    class Source(FakeSource):
+        def __init__(self):
+            self.attempts = 0
+            self.searched = []
+
+        async def post_search_quota(self, query):
+            self.attempts += 1
+            return SimpleNamespace(remains=int(self.attempts % 2 == 1), query_is_free=False,
+                                   wait_till=int(datetime.now(timezone.utc).timestamp()) + 60)
+
+        async def search_public_posts(self, query):
+            self.searched.append(query)
+            return []
+
+        async def search_public_chats(self, query, limit=30):
+            return []
+
+    source = Source()
+    service = ScoutService(repo, source, FakeAI(), SimpleNamespace(), 1)
+    for _ in range(4):
+        assert (await service.discover())[0] == "wait"
+        repo.set_setting("discovery_retry_at", (datetime.now(timezone.utc) - timedelta(seconds=1)).isoformat())
+    groups = {row.phrase: row.group for row in repo.search_queries()}
+    assert [groups[query] == "vibe_work" for query in source.searched] == [False, True, False, True]
 
 
 @pytest.mark.asyncio

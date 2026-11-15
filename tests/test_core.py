@@ -1,9 +1,19 @@
 import pytest
 
 from scout.ai import validate_response
-from scout.core import (calculate_score, explicit_ai_coding, explicit_it_task, likely_job, normalize_link,
+from scout.core import (beginner_ai_role, calculate_score, explicit_ai_coding, explicit_it_task, likely_job, normalize_link,
                         has_direct_contact_link, kwork_excluded, kwork_project_url, mentions_platform,
                         ongoing_role, potential_job, similar, text_hash)
+
+
+def test_beginner_ai_role_needs_both_ai_role_and_entry_signal():
+    announcement = "Вакансия: начинающий AI-специалист, настраивать автоматизацию. Пишите @client12345"
+    assert beginner_ai_role(announcement)
+    assert explicit_it_task(announcement)
+    assert likely_job(announcement)
+    assert not beginner_ai_role("Вакансия: Senior AI-инженер, опыт от пяти лет")
+    assert not beginner_ai_role("Нужен начинающий SMM-специалист по нейросетям")
+    assert beginner_ai_role("Ищут начинающих вайбкодеров для проектов через Cursor")
 
 
 def test_platform_names_and_direct_contact():

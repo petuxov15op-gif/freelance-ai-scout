@@ -85,6 +85,27 @@ def test_draft_rejects_unverified_link():
         validate_response({"draft": "Вот работа: https://example.com", "case_id": None}, "draft")
 
 
+@pytest.mark.asyncio
+async def test_vacancy_draft_asks_to_join_and_offer_portfolio(repo):
+    def respond(request):
+        system = json.loads(request.content)["messages"][0]["content"]
+        assert "хочешь присоединиться к команде" in system
+        assert "Готов предоставить портфолио" in system
+        return httpx.Response(200, json={"choices": [{"message": {"content": json.dumps({
+            "draft": "Здравствуйте! Хочу присоединиться к команде и работать над вашим AI-ботом. Готов предоставить портфолио, если вам интересно.",
+            "case_id": None,
+        })}}]})
+
+    ai = OpenRouter("fake-key", "test-model", repo, 1)
+    await ai.client.aclose()
+    ai.client = httpx.AsyncClient(transport=httpx.MockTransport(respond), base_url="https://openrouter.ai/api/v1")
+    try:
+        result = await ai.ask("draft", "Вакансия: начинающий AI-специалист, неполный день, делать AI-бота")
+        assert "портфолио" in result["draft"]
+    finally:
+        await ai.close()
+
+
 @pytest.mark.parametrize("draft", [
     "Напишите на client@example.com",
     "Позвоните +7 999 123-45-67",
