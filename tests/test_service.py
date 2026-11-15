@@ -163,6 +163,39 @@ async def test_suitable_job_is_sent_without_score_threshold(repo):
 
 
 @pytest.mark.asyncio
+async def test_direct_site_request_survives_ai_false_negative_and_synthetic_contacts_do_not(repo):
+    channel = repo.candidate(100, "program_job", "IT заказы", "", None, 70, "", [])
+    repo.transition_channel(channel.id, "approved")
+
+    class Source(FakeSource):
+        async def messages(self, channel, min_id):
+            posts = (
+                "Нужен разработчик для интеграции ИИ агента с Tilda API. Бюджет 30 т.р. Пишите в лс.\nКонтакты: @anna_smith_42",
+                "Нужен разработчик для интеграции ИИ-агента с Tilda API. Бюджет 30 т.р. Пишите в личку.\nКонтакты: @jane_smith_43",
+                "Ищу человека кто сможет сделать сайт на Тильде и затем дать доступ для дальнейших поправок\nКонтакты: @client55555",
+            )
+            for number, body in enumerate(posts, 1):
+                yield SimpleNamespace(id=number, raw_text=body, date=datetime.now(timezone.utc),
+                                      media=None, fwd_from=None)
+
+    class RejectingAI(FakeAI):
+        async def ask(self, kind, text):
+            if kind == "prefilter":
+                return {"is_job": False, "is_it": False, "codex_feasible": False}
+            return await super().ask(kind, text)
+
+    bot = SimpleNamespace(send_message=AsyncMock(return_value=SimpleNamespace(message_id=42)))
+    service = ScoutService(repo, Source(), RejectingAI(), bot, 1)
+    await service.monitor()
+    assert repo.stats()["jobs"] == 1
+    assert bot.send_message.await_count == 1
+    assert repo.jobs()[0].contact_status == "direct_free"
+    assert [(item.status, item.rejection_reason) for item in repo.pending_messages()] == []
+    await service.monitor()
+    assert bot.send_message.await_count == 1
+
+
+@pytest.mark.asyncio
 async def test_generic_remote_job_is_not_sent(repo):
     channel = repo.candidate(100, "scoutjobs", "Jobs", "", None, 70, "", [])
     repo.transition_channel(channel.id, "approved")

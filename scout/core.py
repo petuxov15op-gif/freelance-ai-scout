@@ -42,6 +42,23 @@ def kwork_excluded(text: str) -> bool:
                           r"покупк\w*\s+(?:ключ\w*|лицензи\w*))", value))
 
 
+def synthetic_contact(text: str) -> bool:
+    """Flag the repeated fake-contact pattern seen in job-channel posts."""
+    return bool(re.search(r"(?:^|\n)\s*Контакты:\s*@[a-z]+_[a-z]+_\d{2}\b", text, re.I))
+
+
+def clear_direct_it_request(text: str, contact_status: str, employment: str) -> bool:
+    """Keep short, direct project requests when an AI prefilter rejects them."""
+    if contact_status != "direct_free" or employment != "one_time_project" or len(text) > 500:
+        return False
+    if not potential_job(text) or not explicit_it_task(text):
+        return False
+    value = normalize_text(text)
+    return bool(re.search(r"^(?:ищу\s+(?:человека|исполнителя|разработчика|программиста)|"
+                          r"ищем\s+(?:человека|исполнителя|разработчика|программиста)|"
+                          r"нужен|нужна|нужно|требуется)\b", value))
+
+
 def has_direct_contact_link(value: str, links: list[dict] | None = None,
                             source_username: str | None = None) -> bool:
     if has_direct_contact(value, source_username):
