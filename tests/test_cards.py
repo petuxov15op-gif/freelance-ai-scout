@@ -8,7 +8,7 @@ import pytest
 from aiogram.exceptions import TelegramBadRequest
 
 from scout.bot import OwnerMiddleware, create_router
-from scout.cards import OrderCards, card_keyboard, card_text
+from scout.cards import OrderCards, card_keyboard, card_text, source_links
 from scout.repository import Repository
 from scout.service import ScoutService
 
@@ -55,6 +55,30 @@ async def test_notification_uses_full_card_once_and_keeps_delivery_guard(repo, j
     rows = sent.kwargs["reply_markup"].inline_keyboard
     assert [len(row) for row in rows] == [1, 2, 2, 2]
     assert rows[2][0].url == "https://t.me/card_jobs/55"
+
+
+@pytest.mark.asyncio
+async def test_kwork_card_links_to_telegram_post_channel_and_kwork(repo):
+    repo.set_setting("platform_sources_enabled", "true")
+    channel = repo.candidate(902, "freelancers_kwork", "Kwork заказы", "", None, 70, "", [])
+    repo.transition_channel(channel.id, "approved")
+    published = datetime(2026, 11, 17, 12, 30, tzinfo=timezone.utc)
+    message = repo.save_message(channel.id, 77, "Нужен лендинг для салона красоты",
+                                "https://kwork.ru/projects/3273402/view", published, {})
+    job, _ = repo.attach_job(message)
+    repo.save_analysis(job.id, "deep", "test", {"title": "Лендинг", "score": 80,
+                                              "requirements": [], "budget": None, "currency": None,
+                                              "deadline": None})
+    bot = SimpleNamespace(send_message=AsyncMock(return_value=SimpleNamespace(message_id=42)))
+    service = ScoutService(repo, SimpleNamespace(), SimpleNamespace(), bot, 1)
+    await service.notify_job(job.id, "instant", allow_unconfirmed=True)
+    sent = bot.send_message.await_args
+    rows = sent.kwargs["reply_markup"].inline_keyboard
+    assert rows[2][0].url == "https://t.me/freelancers_kwork/77"
+    assert rows[2][1].url == "https://t.me/freelancers_kwork"
+    assert rows[3][0].url == "https://kwork.ru/projects/3273402/view"
+    assert "17.11.2026 17:30 Екб" in sent.args[1]
+    assert source_links(repo, job.id)[0] == rows[2][0].url
 
 
 @pytest.mark.asyncio

@@ -2,12 +2,14 @@
 from __future__ import annotations
 
 import logging
+from datetime import timezone
 from html import escape
+from zoneinfo import ZoneInfo
 
 from aiogram.exceptions import TelegramBadRequest
 from aiogram.types import BufferedInputFile, CopyTextButton, InlineKeyboardButton, InlineKeyboardMarkup, LinkPreviewOptions
 
-from .core import permanent_role, synthetic_contact
+from .core import kwork_project_url, permanent_role, synthetic_contact
 from .service import CONTACT_LABELS, EMPLOYMENT_LABELS, FALLBACK_DRAFT, JOB_STATUS_LABELS, PRIORITY_CHANNEL
 
 log = logging.getLogger(__name__)
@@ -19,7 +21,19 @@ def safe(value, limit=300):
     return escape(text[:limit] + ("…" if len(text) > limit else ""))
 
 
-def card_keyboard(job_id, link=None, status="new", following=False, view="home", quick_draft=None):
+def source_links(repo, job_id):
+    message = repo.job_message(job_id)
+    channel = repo.get_channel(message.channel_id) if message else None
+    link = repo.job_link(job_id)
+    kwork = kwork_project_url([{"url": link}]) if link else None
+    if not kwork or not channel or not channel.username or not message:
+        return link, None, None
+    return (f"https://t.me/{channel.username}/{message.telegram_message_id}",
+            f"https://t.me/{channel.username}", kwork)
+
+
+def card_keyboard(job_id, link=None, status="new", following=False, view="home", quick_draft=None,
+                  channel_link=None, kwork_link=None):
     def button(text, action):
         return InlineKeyboardButton(text=text, callback_data=f"card:{action}:{job_id}")
 
@@ -43,7 +57,7 @@ def card_keyboard(job_id, link=None, status="new", following=False, view="home",
     elif view in {"plan", "source"}:
         rows = [back]
     else:
-        source = (InlineKeyboardButton(text="↗ Объявление", url=link) if link
+        source = (InlineKeyboardButton(text="↗ Пост в Telegram" if kwork_link else "↗ Объявление", url=link) if link
                   else button("📄 Объявление", "source"))
         rows = [
             [button("⏹ Не отслеживать" if following else "👀 Отслеживать заказ", "unfollow" if following else "follow")],
@@ -53,6 +67,10 @@ def card_keyboard(job_id, link=None, status="new", following=False, view="home",
                                           callback_data=f"feedback:{'new' if status == 'irrelevant' else 'irrelevant'}:{job_id}")],
             [button("📌 Статус", "statuses"), button("📝 Заметка / цена", "notes")],
         ]
+        if channel_link:
+            rows[2].insert(1, InlineKeyboardButton(text="↗ Канал", url=channel_link))
+        if kwork_link:
+            rows.insert(3, [InlineKeyboardButton(text="↗ Заказ на Kwork", url=kwork_link)])
         if quick_draft:
             copy = (InlineKeyboardButton(text="📋 Скопировать отклик", copy_text=CopyTextButton(text=quick_draft))
                     if len(quick_draft) <= 256 else button("📋 Открыть отклик", "copy_draft"))
@@ -72,6 +90,11 @@ def card_text(repo, job_id, view="home", notice="", sample=False, quick_draft=No
     heading = "🧪 Тест карточки · сохранённый заказ" if sample else "📋 Вакансия" if role else "📋 Заказ"
     parts = [f"{heading} #{job.id}", f"<b>{safe(data.get('title') or job.title or 'Без названия', 180)}</b>"]
     channel = repo.job_channel(job_id)
+    _, _, kwork_link = source_links(repo, job_id)
+    if kwork_link and source:
+        published = source.published_at.replace(tzinfo=timezone.utc) if source.published_at.tzinfo is None else source.published_at
+        parts.append(f"Источник: {safe('@' + channel.username if channel and channel.username else 'Telegram')} · "
+                     f"{published.astimezone(ZoneInfo('Asia/Yekaterinburg')):%d.%m.%Y %H:%M} Екб")
     if channel and (channel.username or "").lower() == PRIORITY_CHANNEL and source and synthetic_contact(source.text):
         parts.append("⚠️ Контакт похож на шаблонные объявления этого канала. Подлинность заказа не проверена — уточни детали перед откликом.")
     requirements = data.get("requirements") or []
@@ -142,10 +165,11 @@ class OrderCards:
         saved = self.repo.analysis(job_id, "draft_saved") if channel and (channel.username or "").lower() == PRIORITY_CHANNEL else None
         quick_draft = saved.result.get("draft") if saved else None
         try:
+            link, channel_link, kwork_link = source_links(self.repo, job_id)
             await message.edit_text(card_text(self.repo, job_id, view, notice, sample, quick_draft), parse_mode="HTML",
                                     link_preview_options=NO_PREVIEW,
-                                    reply_markup=card_keyboard(job_id, self.repo.job_link(job_id), job.status, job.saved,
-                                                               view, quick_draft))
+                                    reply_markup=card_keyboard(job_id, link, job.status, job.saved,
+                                                               view, quick_draft, channel_link, kwork_link))
         except TelegramBadRequest as exc:
             if "message is not modified" not in str(exc).lower():
                 raise
