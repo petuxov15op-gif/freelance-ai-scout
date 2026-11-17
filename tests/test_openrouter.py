@@ -64,6 +64,8 @@ async def test_draft_uses_verified_case_only_when_selected(repo, announcement, c
         assert payload["temperature"] == 0.4
         assert "Не приписывай себе опыт" in payload["messages"][0]["content"]
         system = payload["messages"][0]["content"]
+        assert "Не представляйся по имени" in system
+        assert "Не объясняй очевидную пользу проекта" in system
         assert "пекарн" not in system.lower()
         assert ("https://github.com/petuxov15op-gif/freelance-ai-scout" in system) is expected_link
         return httpx.Response(200, json={"choices": [{"message": {"content": json.dumps({
@@ -86,13 +88,13 @@ def test_draft_rejects_unverified_link():
 
 
 @pytest.mark.asyncio
-async def test_vacancy_draft_asks_to_join_and_offer_portfolio(repo):
+async def test_vacancy_draft_uses_specific_task_without_stock_phrase(repo):
     def respond(request):
         system = json.loads(request.content)["messages"][0]["content"]
-        assert "хочешь присоединиться к команде" in system
-        assert "Готов предоставить портфолио" in system
+        assert "одну конкретную задачу" in system
+        assert "заученного шаблона" in system
         return httpx.Response(200, json={"choices": [{"message": {"content": json.dumps({
-            "draft": "Здравствуйте! Хочу присоединиться к команде и работать над вашим AI-ботом. Готов предоставить портфолио, если вам интересно.",
+            "draft": "Добрый день! Интересна работа над вашим AI-ботом. Расскажете, какие задачи сейчас в приоритете?",
             "case_id": None,
         })}}]})
 
@@ -101,7 +103,7 @@ async def test_vacancy_draft_asks_to_join_and_offer_portfolio(repo):
     ai.client = httpx.AsyncClient(transport=httpx.MockTransport(respond), base_url="https://openrouter.ai/api/v1")
     try:
         result = await ai.ask("draft", "Вакансия: начинающий AI-специалист, неполный день, делать AI-бота")
-        assert "портфолио" in result["draft"]
+        assert result["draft"].startswith("Добрый день!")
     finally:
         await ai.close()
 
@@ -121,6 +123,7 @@ def test_draft_rejects_customer_contact_and_informal_address(draft):
     ("Здравствуйте! Сделаю лендинг. Макет в Figma уже есть?", "Нужен лендинг, макет отдадим в Figma"),
     ("Готов взяться за сайт.", "Нужен сайт"),
     ("Здравствуйте! Сделаю сайт, который будет работать в любой стране. Что вам нужно?", "Нужен сайт на любой территории"),
+    ("Здравствуйте! Я разработаю лендинг для вашего салона красоты, салона красоты. Пришлёте макет?", "Нужен лендинг для салона красоты"),
 ])
 def test_draft_rejects_unverified_claims_and_redundant_questions(draft, announcement):
     assert draft_problem(draft, announcement)
@@ -168,6 +171,33 @@ async def test_draft_retries_contact_sent_back_to_customer(repo):
     try:
         result = await ai.ask("draft", "Нужен Telegram-бот. Для отклика пишите @plashnya")
         assert result["draft"].startswith("Здравствуйте!")
+    finally:
+        await ai.close()
+
+
+@pytest.mark.asyncio
+async def test_draft_retries_repeated_phrase(repo):
+    replies = iter([
+        "Здравствуйте! Я разработаю лендинг для вашего салона красоты, салона красоты. Пришлёте материалы?",
+        "Добрый день! Сделаю лендинг для салона. Пришлёте материалы и пожелания по странице?",
+    ])
+    requests = []
+
+    def respond(request):
+        payload = json.loads(request.content)
+        requests.append(payload)
+        return httpx.Response(200, json={"choices": [{"message": {"content": json.dumps({
+            "draft": next(replies), "case_id": None,
+        })}}]})
+
+    ai = OpenRouter("fake-key", "test-model", repo, 1)
+    await ai.client.aclose()
+    ai.client = httpx.AsyncClient(transport=httpx.MockTransport(respond), base_url="https://openrouter.ai/api/v1")
+    try:
+        result = await ai.ask("draft", "Нужен лендинг для салона красоты")
+        assert result["draft"].startswith("Добрый день!")
+        assert len(requests) == 2
+        assert "дословно повторяет" in requests[1]["messages"][-1]["content"]
     finally:
         await ai.close()
 
