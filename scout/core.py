@@ -105,7 +105,7 @@ def likely_job(text: str) -> bool:
     normalized = normalize_text(text)
     if not potential_job(text):
         return False
-    terms = ("нужен", "нужна", "нужно", "ищем", "ищут", "задача", "требуется", "заказ", "вакансия", "бюджет", "оплата",
+    terms = ("нужен", "нужна", "нужно", "ищем", "ищут", "задача", "требуется", "заказ", "вакансия", "подработк", "бюджет", "оплата",
              "looking for", "need a", "hiring", "project", "budget", "necesitamos", "buscamos",
              "recherche", "cherche un", "suche einen", "suche eine", "precisamos", "procuro")
     return any(term in normalized for term in terms)

@@ -10,9 +10,9 @@ from aiogram import Bot
 from telethon import types
 from telethon.errors import FloodWaitError, RPCError
 
-from .core import (beginner_ai_role, clear_direct_it_request, contact_options, employment_type, explicit_it_task, high_risk_role,
+from .core import (beginner_ai_role, clear_direct_it_request, contact_options, employment_type, explicit_ai_coding, explicit_it_task, high_risk_role,
                    kwork_excluded, kwork_project_url, office_required,
-                   likely_job, mentions_platform, potential_job, similar)
+                   likely_job, mentions_platform, ongoing_role, potential_job, similar)
 from .models import Channel
 from .repository import Repository
 from .telegram import chat_search_term
@@ -39,24 +39,21 @@ FALLBACK_DRAFT = ("Здравствуйте! Меня заинтересовал
                   "и материалы — после просмотра предложу сроки и стоимость.")
 
 DISCOVERY_QUERIES = (
-    "нужен разработчик", "нужно разработать", "ищу программиста", "заказ на разработку",
-    "сделать сайт", "разработать сайт", "сделать бота", "разработать бота",
-    "нужен python", "нужен frontend", "нужен backend", "интеграция api",
-    "нужна автоматизация", "написать скрипт", "разработать приложение", "нужна верстка",
-    "заказ на crm", "доработать сайт", "нужен программист", "заказ на бота",
-    "заказы разработка", "заказы программистам", "фриланс разработка",
+    "заказ сделать сайт", "заказ на лендинг", "фриланс разработка сайта",
+    "нужен бот на заказ", "заказ на Telegram бота", "разовый заказ Python",
+    "доработать сайт заказ", "верстка сайта заказ", "заказ на автоматизацию",
+    "интеграция API заказ", "нужен скрипт фриланс", "заказы программистам",
 )
 DISCOVERY_GROUPS = {
-    "development": DISCOVERY_QUERIES + ("доработать сайт", "ищем разработчика на проект"),
-    "telegram_automation": ("telegram бот разработчик", "интеграция с crm", "автоматизировать заявки",
-                            "подключить api", "автоматизация таблиц"),
-    "project_work": ("разработчик частичная занятость", "нужен подрядчик разработка",
-                     "регулярные задачи python", "технический специалист проект"),
-    "english": ("looking for developer", "need python developer", "freelance automation",
-                "telegram bot developer", "part time developer", "api integration project"),
-    "vibe_work": ("вайбкодер", "ищем вайбкодера", "вайбкодинг подработка", "разработка через Cursor",
-                  "разработка с Codex", "AI разработчик без опыта", "начинающий AI специалист",
-                  "AI специалист неполный день", "вайбкодер проектная работа", "junior AI developer part time"),
+    "development": DISCOVERY_QUERIES,
+    "telegram_automation": ("заказ на Telegram бота", "автоматизировать заявки заказ",
+                            "интеграция CRM фриланс", "автоматизация таблиц заказ"),
+    "project_work": ("нужен подрядчик на сайт", "разовый IT заказ",
+                     "фриланс веб разработка", "проектная разработка Codex"),
+    "english": ("freelance web project", "telegram bot freelance", "api integration project"),
+    "vibe_work": ("вайбкодер проект", "вайбкодинг подработка", "разработка через Cursor подработка",
+                  "разработка с Codex проект", "AI разработчик без опыта Codex",
+                  "вайбкодер неполный день", "Claude Code подработка"),
 }
 DEVELOPMENT_TASK = re.compile(
     r"\b(?:разработ|программ|сайт|лендинг|верстк|бот\b|автоматизац|интеграц|парсинг|"
@@ -64,6 +61,17 @@ DEVELOPMENT_TASK = re.compile(
     r"вайбкод|vibecod|codex\b|cursor\b|ai\s+специалист|ai\s+developer)",
     re.IGNORECASE,
 )
+
+
+def discovery_fit(text: str) -> bool:
+    if not likely_job(text) or not DEVELOPMENT_TASK.search(text):
+        return False
+    if ongoing_role(text) and not explicit_ai_coding(text):
+        return False
+    if re.search(r"\b(?:дизайн\w*|дизайнер\w*|логотип\w*|баннер\w*|иллюстрац\w*)\b", text, re.I):
+        if not re.search(r"\b(?:разработ\w*|верст\w*|код\w*|бот\w*|автоматизац\w*|интеграц\w*)\b", text, re.I):
+            return False
+    return True
 PAUSED_PLATFORM_SOURCES = {
     "design_ai_jobs", "job_developer", "zakazy_it", "freelance_dev_work",
     "freelancers_kwork", "freelance_zakazy", "job_programming_apps_chatgpt_n8n",
@@ -255,7 +263,8 @@ class ScoutService:
                 return await finish("wait", datetime.fromisoformat(retry))
             enabled_groups = {group for group in DISCOVERY_GROUPS
                               if self.repo.setting("search_group_" + group, "true") == "true"}
-            query_rows = self.repo.search_queries(enabled_groups)
+            current_phrases = {phrase for group in enabled_groups for phrase in DISCOVERY_GROUPS[group]}
+            query_rows = [row for row in self.repo.search_queries(enabled_groups) if row.phrase in current_phrases]
             # Alternate the existing and vibe-work tracks while keeping all enabled phrases eligible.
             def ranked_phrases(rows):
                 ranked = sorted(rows, key=lambda row: (row.new_sources + row.suitable_jobs * 2 + row.applications * 3 + row.replies * 4) / (row.searches + 1), reverse=True)
@@ -352,7 +361,7 @@ class ScoutService:
                     if not self.platforms_enabled() and mentions_platform(entity.title or ""):
                         continue
                     if post and (post.date < datetime.now(timezone.utc) - timedelta(days=3)
-                                 or not likely_job(content) or not (DEVELOPMENT_TASK.search(content) or beginner_ai_role(content))):
+                                 or not discovery_fit(content)):
                         continue
                     if post and any(similar(content, prior) for prior in seen_examples):
                         self.repo.record_search(query, duplicates=1)
@@ -366,8 +375,7 @@ class ScoutService:
                         description = await self.source.description(entity)
                         if not self.platforms_enabled() and mentions_platform(description or ""):
                             continue
-                        examples = [text for text in dict.fromkeys([content, *examples])
-                                    if likely_job(text) and (DEVELOPMENT_TASK.search(text) or beginner_ai_role(text))]
+                        examples = [text for text in dict.fromkeys([content, *examples]) if discovery_fit(text)]
                         if examples and any(similar(examples[0], prior) for prior in seen_examples):
                             self.repo.record_search(query, duplicates=1)
                             continue
@@ -567,6 +575,7 @@ class ScoutService:
                           "no_it_signal" if not explicit_it_task(message.text) else
                           "requires_verified_expertise" if high_risk_role(message.text) else
                           "office_required" if office_required(message.text) else
+                          "ongoing_without_ai_coding" if ongoing_role(message.text) and not explicit_ai_coding(message.text) else
                           "category_disabled" if self.repo.setting("employment_" + employment,
                               "false" if employment == "full_time_role" else "true") != "true"
                               and not (employment == "full_time_role" and beginner_ai_role(message.text)

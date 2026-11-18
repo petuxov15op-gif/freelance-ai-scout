@@ -7,7 +7,7 @@ from telethon.errors import FloodWaitError
 
 from scout.bot import create_router, job_keyboard
 from scout.models import Channel, MonitoringState
-from scout.service import DISCOVERY_GROUPS, ScoutService
+from scout.service import DISCOVERY_GROUPS, ScoutService, discovery_fit
 from scout.telegram import chat_search_term
 
 
@@ -18,6 +18,26 @@ def test_audited_sources_pause_only_confirmed_intermediaries(repo):
         assert service.source_paused(SimpleNamespace(username=username, title="Jobs", description=""))
     for username in ("sova_freelance", "workk_on", "webjobagregator"):
         assert not service.source_paused(SimpleNamespace(username=username, title="Jobs", description=""))
+
+
+@pytest.mark.parametrize("announcement, expected", [
+    ("Нужен лендинг для кафе, разовый заказ, бюджет 15000 рублей", True),
+    ("Нужен дизайн сайта и логотипа, бюджет 15000 рублей", False),
+    ("Ищем Python-разработчика в штат на полный день", False),
+    ("Подработка: поддерживать Python-бота по 3 часа в день", False),
+    ("Подработка: делать веб-приложение с Codex по 3 часа в день", True),
+    ("Нужен дизайнер интерфейса на полный день, вакансия", False),
+])
+def test_discovery_fit_prefers_freelance_and_vibe_roles(announcement, expected):
+    assert discovery_fit(announcement) is expected
+
+
+def test_discovery_queries_focus_on_freelance_and_vibe_coding():
+    phrases = {phrase for group in DISCOVERY_GROUPS.values() for phrase in group}
+    assert "ищу программиста" not in phrases
+    assert "part time developer" not in phrases
+    assert "заказ на лендинг" in phrases
+    assert "вайбкодинг подработка" in phrases
 
 
 @pytest.mark.asyncio
@@ -476,7 +496,7 @@ async def test_beginner_ai_vacancy_with_unconfirmed_application_form_is_labeled(
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("announcement, should_send", [
-    ("Подработка: поддерживать Python-бота по 3 часа в день, оплата ежемесячно", True),
+    ("Подработка: поддерживать Python-бота по 3 часа в день, оплата ежемесячно", False),
     ("Подработка: поддерживать Python-бота по 3 часа в день с помощью Codex, оплата ежемесячно", True),
     ("Разовая подработка: написать Python-скрипт для выгрузки данных, оплата за результат", True),
 ])
