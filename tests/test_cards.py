@@ -7,6 +7,7 @@ from unittest.mock import AsyncMock
 import pytest
 from aiogram.exceptions import TelegramBadRequest
 
+from scout.ai import DRAFT_VERSION
 from scout.bot import OwnerMiddleware, create_router
 from scout.cards import OrderCards, card_keyboard, card_text, source_links
 from scout.repository import Repository
@@ -31,7 +32,7 @@ def job(repo):
 
 def card_service(repo):
     return SimpleNamespace(repo=repo, owner_id=1, ai=SimpleNamespace(ask=AsyncMock(side_effect=lambda kind, text:
-        {"draft": "Здравствуйте! Уточните требования к форме."} if kind == "draft" else
+        {"draft": "Здравствуйте! Уточните требования к форме.", "case_id": None, "draft_version": DRAFT_VERSION} if kind == "draft" else
         {"plan": ["Проверить макет", "Сверстать страницу"], "questions": ["Какие поля формы нужны?"]})))
 
 
@@ -135,10 +136,14 @@ async def test_input_updates_same_message_and_cancel_does_not_save(repo, job, fi
 
 @pytest.mark.asyncio
 async def test_draft_generation_cached_owner_edit_reused_and_plan_stays_in_card(repo, job):
+    repo.save_analysis(job.id, "draft_saved", "owner", {"draft": "Старый текст от модели", "case_id": None})
     service = card_service(repo)
     cards = OrderCards(service)
     tap = callback(job, "draft:{id}")
     await cards.handle(tap)
+    tap.answer.assert_awaited_once_with()
+    tap.message.edit_text.assert_awaited_once()
+    assert "Уточните требования к форме" in tap.message.edit_text.await_args.args[0]
     await cards.handle(tap)
     service.ai.ask.assert_awaited_once()
     tap.data = f"field:draft:{job.id}"
@@ -208,15 +213,26 @@ async def test_ai_error_keeps_other_buttons_and_retry_available(repo, job):
 
 
 @pytest.mark.asyncio
-async def test_vacancy_draft_has_portfolio_fallback(repo, job):
+async def test_vacancy_draft_has_role_specific_fallback(repo, job):
     repo.set_job_details(job.id, "part_time_role", {"status": "direct_free", "method": "Telegram", "url": "https://t.me/customer"})
     service = card_service(repo)
     service.ai.ask.side_effect = RuntimeError("API unavailable")
     tap = callback(job, "draft:{id}")
     await OrderCards(service).handle(tap)
     draft = repo.analysis(job.id, "draft_saved").result["draft"]
-    assert "Хочу присоединиться" in draft
-    assert "Готов предоставить портфолио" in draft
+    assert "как проходит отбор" in draft
+
+
+@pytest.mark.asyncio
+async def test_failed_draft_refresh_keeps_the_saved_reply(repo, job):
+    original = {"draft": "Старый текст от модели", "case_id": None}
+    repo.save_analysis(job.id, "draft_saved", "owner", original)
+    service = card_service(repo)
+    service.ai.ask.side_effect = RuntimeError("API unavailable")
+    tap = callback(job, "draft:{id}")
+    await OrderCards(service).handle(tap)
+    assert repo.analysis(job.id, "draft_saved").result == original
+    assert "Показан сохранённый отклик" in tap.message.edit_text.await_args.args[0]
 
 
 @pytest.mark.asyncio

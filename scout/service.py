@@ -10,6 +10,7 @@ from aiogram import Bot
 from telethon import types
 from telethon.errors import FloodWaitError, RPCError
 
+from .ai import draft_needs_refresh
 from .core import (beginner_ai_role, clear_direct_it_request, contact_options, employment_type, explicit_ai_coding, explicit_it_task, high_risk_role,
                    kwork_excluded, kwork_project_url, office_required,
                    likely_job, mentions_platform, ongoing_role, potential_job, similar)
@@ -35,8 +36,7 @@ EMPLOYMENT_LABELS = {"one_time_project": "Разовый заказ", "recurring
 CONTACT_LABELS = {"direct_free": "Бесплатный", "platform_free": "Бесплатный",
                   "paid": "Платный", "unknown": "Не подтверждено", "none": "Не подтверждено"}
 PRIORITY_CHANNEL = "program_job"
-FALLBACK_DRAFT = ("Здравствуйте! Меня заинтересовал ваш проект. Пришлите, пожалуйста, описание задачи "
-                  "и материалы — после просмотра предложу сроки и стоимость.")
+FALLBACK_DRAFT = "Здравствуйте! Пришлите, пожалуйста, материалы по задаче. Посмотрю и скажу, сколько займёт работа."
 
 DISCOVERY_QUERIES = (
     "заказ сделать сайт", "заказ на лендинг", "фриланс разработка сайта",
@@ -656,7 +656,7 @@ class ScoutService:
             return
         try:
             saved = self.repo.analysis(job_id, "draft_saved") if (channel.username or "").lower() == PRIORITY_CHANNEL else None
-            quick_draft = saved.result.get("draft") if saved else None
+            quick_draft = saved.result.get("draft") if saved and not draft_needs_refresh(saved.result) else None
             link, channel_link, kwork_link = source_links(self.repo, job_id)
             sent = await self.bot.send_message(
                 self.owner_id, card_text(self.repo, job_id, quick_draft=quick_draft), parse_mode="HTML", link_preview_options=NO_PREVIEW,

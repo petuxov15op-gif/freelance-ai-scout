@@ -9,6 +9,7 @@ from zoneinfo import ZoneInfo
 from aiogram.exceptions import TelegramBadRequest
 from aiogram.types import BufferedInputFile, CopyTextButton, InlineKeyboardButton, InlineKeyboardMarkup, LinkPreviewOptions
 
+from .ai import draft_needs_refresh
 from .core import kwork_project_url, permanent_role, synthetic_contact
 from .service import CONTACT_LABELS, EMPLOYMENT_LABELS, FALLBACK_DRAFT, JOB_STATUS_LABELS, PRIORITY_CHANNEL
 
@@ -163,7 +164,7 @@ class OrderCards:
         sample = (getattr(message, "text", "") or "").startswith("🧪")
         channel = self.repo.job_channel(job_id)
         saved = self.repo.analysis(job_id, "draft_saved") if channel and (channel.username or "").lower() == PRIORITY_CHANNEL else None
-        quick_draft = saved.result.get("draft") if saved else None
+        quick_draft = saved.result.get("draft") if saved and not draft_needs_refresh(saved.result) else None
         try:
             link, channel_link, kwork_link = source_links(self.repo, job_id)
             await message.edit_text(card_text(self.repo, job_id, view, notice, sample, quick_draft), parse_mode="HTML",
@@ -257,32 +258,46 @@ class OrderCards:
         elif kind in {"plan", "draft"} or (kind == "card" and action == "redraft"):
             view = "draft" if kind == "draft" or action == "redraft" else "plan"
             if job_id in self.generating:
-                await callback.answer("Уже готовлю. Результат появится в этой карточке.")
+                if view == "draft":
+                    await callback.answer()
+                else:
+                    await callback.answer("Уже готовлю. Результат появится в этой карточке.")
                 return
             cached = self.repo.analysis(job_id, "draft_saved" if view == "draft" else "plan_card")
-            if cached and action != "redraft":
+            if cached and action != "redraft" and (view != "draft" or not draft_needs_refresh(cached.result)):
                 await callback.answer()
                 await self.show(callback.message, job_id, view)
                 return
             self.generating.add(job_id)
             try:
-                await callback.answer("Готовлю отклик" if view == "draft" else "Готовлю разбор")
-                await self.show(callback.message, job_id, notice="⏳ Готовлю отклик…" if view == "draft" else "⏳ Разбираю заказ…")
+                if view == "draft":
+                    await callback.answer()
+                else:
+                    await callback.answer("Готовлю разбор")
+                    await self.show(callback.message, job_id, notice="⏳ Разбираю заказ…")
                 original = self.repo.job_original(job_id)
                 if not original:
                     raise ValueError("Нет исходного текста")
                 result = await self.service.ai.ask(view, original)
-                self.repo.save_analysis(job_id, "draft_saved" if view == "draft" else "plan_card", "owner", result)
+                if view == "draft":
+                    current = self.repo.analysis(job_id, "draft_saved")
+                    if (current.result if current else None) == (cached.result if cached else None):
+                        self.repo.save_analysis(job_id, "draft_saved", "owner", result)
+                else:
+                    self.repo.save_analysis(job_id, "plan_card", "owner", result)
                 await self.show(callback.message, job_id, view)
             except Exception:
                 log.exception("Подготовка %s для карточки %s", view, job_id)
                 if view == "draft":
-                    fallback = ("Здравствуйте! Меня заинтересовала ваша вакансия. Хочу присоединиться к команде "
-                                "и обсудить задачи и график. Готов предоставить портфолио, если вам интересно."
-                                if (job.employment_type in {"part_time_role", "full_time_role"}
-                                    or permanent_role(self.repo.job_original(job_id) or "")) else FALLBACK_DRAFT)
-                    self.repo.save_analysis(job_id, "draft_saved", "owner", {"draft": fallback})
-                    await self.show(callback.message, job_id, "draft", "ИИ сейчас недоступен — сохранил короткий шаблон. Проверь его перед отправкой.")
+                    if self.repo.analysis(job_id, "draft_saved"):
+                        notice = "Новый вариант не получился. Показан сохранённый отклик."
+                    else:
+                        fallback = ("Здравствуйте! Расскажите, пожалуйста, с какой задачи начнётся работа и как проходит отбор."
+                                    if (job.employment_type in {"part_time_role", "full_time_role"}
+                                        or permanent_role(self.repo.job_original(job_id) or "")) else FALLBACK_DRAFT)
+                        self.repo.save_analysis(job_id, "draft_saved", "owner", {"draft": fallback})
+                        notice = "ИИ сейчас недоступен. Проверь запасной текст перед отправкой."
+                    await self.show(callback.message, job_id, "draft", notice)
                 else:
                     await self.show(callback.message, job_id, notice="Не удалось получить ответ ИИ. Попробуй ещё раз; остальные кнопки доступны.")
             finally:

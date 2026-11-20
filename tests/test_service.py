@@ -5,6 +5,7 @@ from unittest.mock import AsyncMock
 import pytest
 from telethon.errors import FloodWaitError
 
+from scout.ai import DRAFT_VERSION
 from scout.bot import create_router, job_keyboard
 from scout.models import Channel, MonitoringState
 from scout.service import DISCOVERY_GROUPS, ScoutService, discovery_fit
@@ -324,7 +325,7 @@ async def test_priority_channel_is_processed_first_and_new_post_gets_ready_reply
     class ReplyAI(FakeAI):
         async def ask(self, kind, text):
             if kind == "draft":
-                return {"draft": reply, "case_id": None}
+                return {"draft": reply, "case_id": None, "draft_version": DRAFT_VERSION}
             return await super().ask(kind, text)
 
     source = Source()
@@ -362,7 +363,7 @@ async def test_priority_order_has_fallback_reply_when_generation_fails(repo):
     await service.monitor_priority()
     bot.send_message.assert_awaited_once()
     assert "Готовый отклик" in bot.send_message.await_args.args[1]
-    assert "описание задачи" in bot.send_message.await_args.args[1]
+    assert "материалы по задаче" in bot.send_message.await_args.args[1]
 
 
 @pytest.mark.asyncio

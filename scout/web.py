@@ -11,6 +11,7 @@ from aiohttp import web
 from aiogram.utils.web_app import safe_parse_webapp_init_data
 from sqlalchemy import func, select
 
+from .ai import draft_needs_refresh
 from .models import Job, Message
 from .service import JOB_STATUS_LABELS, CONTACT_LABELS
 
@@ -215,15 +216,20 @@ def create_web_app(service, token: str, owner_id: int, public_url: str = "") -> 
                 text = data.get("draft")
                 if not isinstance(text, str) or not text.strip() or len(text) > 10000:
                     raise web.HTTPBadRequest(text="Текст отклика: от 1 до 10 000 символов")
-            elif saved:
+                repo.save_analysis(job.id, "draft_saved", "owner", {"draft": text})
+            elif saved and not draft_needs_refresh(saved.result):
                 text = saved.result["draft"]
             else:
                 original = repo.job_original(job.id)
                 if not original:
                     raise web.HTTPNotFound(text="Текст объявления недоступен")
                 result = await service.ai.ask("draft", original)
-                text = result["draft"]
-            repo.save_analysis(job.id, "draft_saved", "owner", {"draft": text})
+                current = repo.analysis(job.id, "draft_saved")
+                if (current.result if current else None) == (saved.result if saved else None):
+                    repo.save_analysis(job.id, "draft_saved", "owner", result)
+                    text = result["draft"]
+                else:
+                    text = current.result["draft"]
         return web.json_response({"draft": text})
 
     async def add_channel(request):

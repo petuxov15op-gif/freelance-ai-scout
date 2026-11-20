@@ -10,6 +10,7 @@ import pytest
 from aiohttp import web
 from aiohttp.test_utils import TestClient, TestServer
 
+from scout.ai import DRAFT_VERSION
 from scout.models import Job
 from scout.service import ScoutService
 from scout.web import authenticated_owner, create_web_app, public_link
@@ -30,7 +31,8 @@ def signed_data(user=OWNER, age=0, token=TOKEN, **extra):
 @pytest.fixture
 def web_service(repo):
     source = SimpleNamespace(latest_message_id=AsyncMock(return_value=42))
-    ai = SimpleNamespace(ask=AsyncMock(return_value={"draft": "Здравствуйте! Уточните сценарии записи.", "case_id": None}))
+    ai = SimpleNamespace(ask=AsyncMock(return_value={"draft": "Здравствуйте! Уточните сценарии записи.",
+                                                    "case_id": None, "draft_version": DRAFT_VERSION}))
     return ScoutService(repo, source, ai, SimpleNamespace(), OWNER)
 
 
@@ -128,6 +130,7 @@ async def test_feedback_saved_and_duplicate_tap_is_idempotent(client, headers, j
 
 
 async def test_draft_generated_once_then_owner_edits_persist(client, headers, job, repo, web_service):
+    repo.save_analysis(job.id, "draft_saved", "owner", {"draft": "Старый текст от модели", "case_id": None})
     url = f"/api/jobs/{job.id}/draft"
     first = await (await client.post(url, headers=headers)).json()
     assert first["draft"].startswith("Здравствуйте!")
