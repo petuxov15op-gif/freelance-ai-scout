@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import re
+from collections import deque
 from datetime import datetime, timedelta, timezone
 from zoneinfo import ZoneInfo
 
@@ -11,10 +12,10 @@ from telethon import types
 from telethon.errors import FloodWaitError, RPCError
 
 from .ai import draft_needs_refresh
-from .core import (beginner_ai_role, clear_direct_it_request, contact_options, employment_type, explicit_ai_coding, explicit_it_task, high_risk_role,
+from .core import (announcement_parts, beginner_ai_role, borderline_it_order, clear_direct_it_request, contact_options, employment_type, explicit_ai_coding, explicit_it_task, high_risk_role,
                    kwork_excluded, kwork_project_url, office_required,
                    likely_job, mentions_platform, ongoing_role, potential_job, similar)
-from .models import Channel
+from .models import Channel, Message
 from .repository import Repository
 from .telegram import chat_search_term
 
@@ -64,7 +65,7 @@ DEVELOPMENT_TASK = re.compile(
 
 
 def discovery_fit(text: str) -> bool:
-    if not likely_job(text) or not DEVELOPMENT_TASK.search(text):
+    if not likely_job(text) or not (DEVELOPMENT_TASK.search(text) or borderline_it_order(text)):
         return False
     if ongoing_role(text) and not explicit_ai_coding(text):
         return False
@@ -354,15 +355,18 @@ class ScoutService:
                     advance()
                     continue
                 for entity, post in [*found, *((chat, None) for chat in chats)]:
-                    content = (post.raw_text or "") if post else ""
                     if entity.id in known:
                         self.repo.record_search(query, duplicates=1)
                         continue
                     if not self.platforms_enabled() and mentions_platform(entity.title or ""):
                         continue
-                    if post and (post.date < datetime.now(timezone.utc) - timedelta(days=3)
-                                 or not discovery_fit(content)):
-                        continue
+                    content = ""
+                    if post:
+                        if post.date < datetime.now(timezone.utc) - timedelta(days=3):
+                            continue
+                        content = next((text for text, _ in announcement_parts(post.raw_text or "") if discovery_fit(text)), "")
+                        if not content:
+                            continue
                     if post and any(similar(content, prior) for prior in seen_examples):
                         self.repo.record_search(query, duplicates=1)
                         continue
@@ -560,19 +564,28 @@ class ScoutService:
 
     async def process_pending(self, limit: int | None = 500, channel_id: int | None = None) -> None:
         self.repo.recover_stale_notifications()
-        for message in self.repo.pending_messages(limit=limit, channel_id=channel_id):
+        pending = deque(self.repo.pending_messages(limit=limit, channel_id=channel_id))
+        while pending:
+            message = pending.popleft()
             try:
                 channel = self.repo.get_channel(message.channel_id)
                 if channel is None or channel.status != "approved":
                     continue
+                if self.source_paused(channel):
+                    self.repo.mark_message(message.id, "irrelevant", "source_paused")
+                    continue
+                if not message.part_number:
+                    parts = announcement_parts(message.text, (message.metadata_json or {}).get("outbound_links"))
+                    if len(parts) > 1:
+                        pending.extendleft(reversed(self._split_post(message, channel, parts)))
+                        continue
                 employment = employment_type(message.text)
                 contact = contact_options(message.text, (message.metadata_json or {}).get("outbound_links"),
                                           channel.username if channel else None,
                                           (message.metadata_json or {}).get("author_username"))
-                reason = ("source_paused" if self.source_paused(channel) else
-                          "kwork_excluded" if self.kwork_post(channel, message) and kwork_excluded(message.text) else
+                reason = ("kwork_excluded" if self.kwork_post(channel, message) and kwork_excluded(message.text) else
                           "not_job" if not potential_job(message.text) else
-                          "no_it_signal" if not explicit_it_task(message.text) else
+                          "no_it_signal" if not (explicit_it_task(message.text) or borderline_it_order(message.text)) else
                           "requires_verified_expertise" if high_risk_role(message.text) else
                           "office_required" if office_required(message.text) else
                           "ongoing_without_ai_coding" if ongoing_role(message.text) and not explicit_ai_coding(message.text) else
@@ -634,6 +647,19 @@ class ScoutService:
                 except Exception as exc:
                     self.last_monitor_errors.append(f"Уведомление: {type(exc).__name__}")
                     log.exception("Повторное уведомление заказа %s не удалось", job.id)
+
+    def _split_post(self, message: Message, channel: Channel, parts: list[tuple[str, list[dict]]]) -> list[Message]:
+        source_link = f"https://t.me/{channel.username}/{message.telegram_message_id}" if channel.username else None
+        rows = []
+        for text, links in parts:
+            project_link = None
+            if self.kwork_source(channel):
+                plain_links = [{"url": match.rstrip(".,;)")} for match in re.findall(r"https?://[^\s<>]+", text)]
+                project_link = kwork_project_url([*links, *plain_links])
+            contact = contact_options(text, links, channel.username)
+            rows.append((text, project_link or source_link,
+                        {"outbound_links": links, "contact_url": contact.get("url")}))
+        return self.repo.split_message(message.id, rows)
 
     async def notify_job(self, job_id: int, kind: str, allow_unconfirmed: bool = False) -> None:
         from .cards import NO_PREVIEW, card_keyboard, card_text, source_links

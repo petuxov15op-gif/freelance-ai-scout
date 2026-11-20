@@ -57,6 +57,7 @@ class Message(Base):
     id: Mapped[int] = mapped_column(primary_key=True)
     channel_id: Mapped[int] = mapped_column(ForeignKey("channels.id"), index=True)
     telegram_message_id: Mapped[int] = mapped_column(Integer)
+    part_number: Mapped[int] = mapped_column(Integer, default=0, server_default="0")
     text: Mapped[str] = mapped_column(Text)
     link: Mapped[str | None] = mapped_column(Text)
     normalized_link: Mapped[str | None] = mapped_column(Text, index=True)
@@ -66,7 +67,7 @@ class Message(Base):
     metadata_json: Mapped[dict] = mapped_column(JSON, default=dict)
     status: Mapped[str] = mapped_column(String(20), default="pending", index=True)
     rejection_reason: Mapped[str | None] = mapped_column(String(60))
-    __table_args__ = (UniqueConstraint("channel_id", "telegram_message_id"),)
+    __table_args__ = (UniqueConstraint("channel_id", "telegram_message_id", "part_number", name="uq_messages_post_part"),)
 
 
 class Job(Base):

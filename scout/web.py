@@ -159,7 +159,7 @@ def create_web_app(service, token: str, owner_id: int, public_url: str = "") -> 
         bars = [0] * count
         with repo.factory() as db:
             for timestamp in db.scalars(select(Message.discovered_at).where(
-                    Message.discovered_at >= since, Message.discovered_at <= now)):
+                    Message.part_number == 0, Message.discovered_at >= since, Message.discovered_at <= now)):
                 delta = (timestamp.replace(tzinfo=timezone.utc) - since).total_seconds()
                 bars[min(count - 1, int(delta / (days * 86400) * count))] += 1
         analytics = repo.analytics(days)

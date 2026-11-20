@@ -10,7 +10,7 @@ from telethon import TelegramClient, functions, types
 from telethon.network.connection import ConnectionTcpObfuscated
 from telethon.errors import FloodWaitError, RPCError
 
-from .core import contact_options, likely_job, similar
+from .core import announcement_parts, contact_options, likely_job, similar
 
 log = logging.getLogger(__name__)
 USERNAME = re.compile(r"^(?:https?://t\.me/|@)?([A-Za-z][A-Za-z0-9_]{4,31})/?$")
@@ -130,13 +130,15 @@ class TelegramSource:
             content = (message.raw_text or "").lower()
             if any(token in content for token in ("реклама", "рекламный пост", "подписывайтесь", "advertisement", "sponsored")):
                 advertising += 1
-            if message.raw_text and likely_job(message.raw_text):
+            for text, links in announcement_parts(message.raw_text or "", outbound_links(message)):
+                if not likely_job(text):
+                    continue
                 jobs += 1
-                if any(similar(message.raw_text, prior) for prior in result):
+                if any(similar(text, prior) for prior in result):
                     repeats += 1
                 else:
-                    result.append(message.raw_text[:800])
-                if contact_options(message.raw_text, outbound_links(message), getattr(entity, "username", None))["status"] in {"direct_free", "platform_free"}:
+                    result.append(text[:800])
+                if contact_options(text, links, getattr(entity, "username", None))["status"] in {"direct_free", "platform_free"}:
                     reachable += 1
         active = bool(latest and latest >= cutoff)
         return Inspection(result[:3], active, advertising / total if total else 0.0,
@@ -177,7 +179,7 @@ class TelegramSource:
             yield message
 
 
-def outbound_links(message) -> list[dict[str, str]]:
+def outbound_links(message) -> list[dict]:
     result = []
     text = message.raw_text or ""
     for entity in getattr(message, "entities", None) or []:
@@ -185,7 +187,7 @@ def outbound_links(message) -> list[dict[str, str]]:
         if url:
             encoded = text.encode("utf-16-le")
             label = encoded[entity.offset * 2:(entity.offset + entity.length) * 2].decode("utf-16-le")
-            result.append({"label": label, "url": url})
+            result.append({"label": label, "url": url, "offset": entity.offset, "length": entity.length})
     for row in getattr(message, "buttons", None) or []:
         for button in row:
             if button.url:

@@ -138,6 +138,50 @@ def explicit_it_task(text: str) -> bool:
     return beginner_ai_role(text) or any(re.search(r"\b" + re.escape(term), normalized) for term in technical_terms)
 
 
+def borderline_it_order(text: str) -> bool:
+    """Send orders missed by the keyword filter to the normal AI prefilter."""
+    value = normalize_text(text)
+    return (likely_job(text)
+            and bool(re.search(r"\b(?:доработ\w*|настро\w*|настраива\w*|структур\w*|выгруз\w*|синхрониз\w*)\b", value))
+            and bool(re.search(r"\b(?:сервис\s+деск\w*|help\s?desk|glpi|таблиц\w*|excel|google\s+sheets|реестр\w*|выгруз\w*)\b", value)))
+
+
+DIGEST_TAG = re.compile(r"(?m)^[\u200b \t]*#[\w-]+[ \t]*\r?\n")
+DIGEST_NUMBER = re.compile(r"(?im)^[\u200b \t]*[1-9]\d{0,2}[.)][ \t]+"
+                           r"(?=нуж(?:ен|на|но|ны)\b|ищ(?:у|ем|ет)\b|требуется\b|заказ\b|вакансия\b)")
+DIGEST_LEAD = re.compile(r"(?i)\b(?:нуж(?:ен|на|но|ны)|ищ(?:у|ем|ет|ут)|требуется|вакансия|заказ)\b")
+DIGEST_TITLE = re.compile(r"(?i)\b(?:подборк\w*|(?:новые|свежие)\s+(?:заказы|вакансии))\b")
+
+
+def announcement_parts(text: str, links: list[dict] | None = None) -> list[tuple[str, list[dict]]]:
+    """Split structured digests, keeping only links anchored to each part."""
+    links = links or []
+    for heading in (DIGEST_TAG, DIGEST_NUMBER):
+        starts = list(heading.finditer(text))
+        if len(starts) < 2:
+            continue
+        ends = [match.start() for match in starts[1:]] + [len(text)]
+        sections = [(match, end) for match, end in zip(starts, ends)
+                    if len(text[match.end():end].strip()) >= 20]
+        if sum(bool(DIGEST_LEAD.search(text[match.end():end].strip().splitlines()[0]))
+               for match, end in sections) < 2:
+            continue
+        parts = []
+        for match, end in sections:
+            start = match.start()
+            # Telegram entity offsets are measured in UTF-16 code units.
+            left = len(text[:start].encode("utf-16-le")) // 2
+            right = len(text[:end].encode("utf-16-le")) // 2
+            section_links = [link for link in links if isinstance(link.get("offset"), int)
+                             and left <= link["offset"] < link["offset"] + link["length"] <= right]
+            parts.append((text[start:end].strip(), section_links))
+        if (heading is DIGEST_NUMBER and not DIGEST_TITLE.search(text[:starts[0].start()])
+                and sum(bool(contact_options(part, urls)["url"]) for part, urls in parts) < 2):
+            continue
+        return parts
+    return [(text, links)]
+
+
 def beginner_ai_role(text: str) -> bool:
     value = normalize_text(text)
     beginner = re.search(r"\b(?:без опыта|без коммерческого опыта|начинающ\w*|джун\w*|junior|entry level|стаж[её]р\w*)\b", value)
@@ -206,7 +250,7 @@ def contact_options(text: str, links: list[dict] | None = None, source_username:
     """Classify only contact paths evidenced by the announcement or its entities."""
     options = []
     source = (source_username or "").lower()
-    invitation = r"(?:пишите|напишите|написать|связаться|контакт|отклик|личк|dm\b|apply|contact|email|почт)"
+    invitation = r"(?:пишите|напишите|написать|свяжитесь|связаться|контакт|отклик|личк|dm\b|apply|contact|email|почт)"
     evidence = text + " " + " ".join(link.get("label", "") for link in links or [])
     paid = bool(re.search(r"(?<!\w)(?:платн\w*\s+отклик|оплат\w*\s+(?:за\s+)?отклик|отклик\w*\s+за\s+\d|paid\s+application)", evidence, re.I))
     free = bool(re.search(r"(?:бесплатн\w*\s+отклик|отклик\w*\s+бесплатн|free\s+to\s+apply)", evidence, re.I))
@@ -217,6 +261,8 @@ def contact_options(text: str, links: list[dict] | None = None, source_username:
             options.append({"status": "direct_free", "method": "Telegram", "url": "https://t.me/" + name})
     for match in re.finditer(r"(?<![\w.+-])[\w.+-]+@[\w.-]+\.[A-Za-z]{2,}\b", text):
         options.append({"status": "direct_free", "method": "Email", "url": "mailto:" + match[0]})
+    for match in re.finditer(r"(?im)^[ \t]*(?:➡️?|телефон[ \t]*:)[ \t]*(\+7(?:[ \t()-]*\d){10})[ \t]*$", text):
+        options.append({"status": "direct_free", "method": "Телефон", "url": "tel:+" + re.sub(r"\D", "", match[1])})
     if (author_username and re.fullmatch(r"[A-Za-z][A-Za-z0-9_]{4,31}", author_username)
             and re.search(r"(?:пишите|напишите|обращайтесь)\s+автору|(?:dm|message)\s+the\s+author", text, re.I)):
         options.append({"status": "direct_free", "method": "Telegram", "url": "https://t.me/" + author_username})

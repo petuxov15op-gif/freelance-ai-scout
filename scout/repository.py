@@ -7,7 +7,7 @@ from sqlalchemy import case, func, select, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import sessionmaker
 
-from .core import normalize_link, similar, text_hash
+from .core import kwork_project_url, normalize_link, similar, text_hash
 from .db import transaction
 from .models import (AIUsage, Analysis, Channel, ChannelCandidate, Feedback, Job,
                      JobSource, Message, MonitoringState, Notification, SearchQuery, Setting, utcnow)
@@ -143,7 +143,8 @@ class Repository:
                      published_at: datetime, metadata: dict, advance_cursor: bool = True) -> Message:
         with transaction(self.factory) as db:
             message = db.scalar(select(Message).where(Message.channel_id == channel_id,
-                                                      Message.telegram_message_id == telegram_message_id))
+                                                      Message.telegram_message_id == telegram_message_id,
+                                                      Message.part_number == 0))
             if message is None:
                 message = Message(channel_id=channel_id, telegram_message_id=telegram_message_id,
                                   text=text, link=link, normalized_link=normalize_link(link), text_hash=text_hash(text),
@@ -154,6 +155,24 @@ class Repository:
             if advance_cursor and state and telegram_message_id > state.last_message_id:
                 state.last_message_id = telegram_message_id
             return message
+
+    def split_message(self, message_id: int, parts: list[tuple[str, str | None, dict]]) -> list[Message]:
+        with transaction(self.factory) as db:
+            parent = db.get(Message, message_id)
+            if not parent or parent.status != "pending" or parent.part_number:
+                return []
+            children = []
+            for number, (text, link, metadata) in enumerate(parts, start=1):
+                # A Telegram digest URL identifies the whole publication, not an individual job.
+                project_url = kwork_project_url([{"url": link}]) if link else None
+                child = Message(channel_id=parent.channel_id, telegram_message_id=parent.telegram_message_id,
+                                part_number=number, text=text, link=link, normalized_link=normalize_link(project_url),
+                                text_hash=text_hash(text), published_at=parent.published_at,
+                                discovered_at=parent.discovered_at, metadata_json=metadata)
+                children.append(child)
+            db.add_all(children)
+            parent.status = "split"
+            return children
 
     def mark_message(self, message_id: int, status: str, reason: str | None = None) -> None:
         with transaction(self.factory) as db:
@@ -217,6 +236,7 @@ class Repository:
         if not contact:
             return None
         return next((job for job, other in recent if (other.metadata_json or {}).get("contact_url") == contact
+                     and (other.channel_id, other.telegram_message_id) != (message.channel_id, message.telegram_message_id)
                      and similar(message.text, other.text)), None)
 
     def set_job_details(self, job_id: int, employment: str, contact: dict) -> None:
@@ -401,7 +421,7 @@ class Repository:
     def analytics(self, days: int | None) -> dict:
         since = utcnow() - timedelta(days=days) if days else None
         with self.factory() as db:
-            messages = select(func.count()).select_from(Message)
+            messages = select(func.count()).select_from(Message).where(Message.part_number == 0)
             jobs = select(func.count()).select_from(Job)
             unique = select(func.count()).select_from(Job).where(Job.score.is_not(None), Job.contact_status.in_(("direct_free", "platform_free")))
             if since:
@@ -475,7 +495,7 @@ class Repository:
         with self.factory() as db:
             return {"approved": db.scalar(select(func.count()).select_from(Channel).where(Channel.status == "approved")),
                     "pending": db.scalar(select(func.count()).select_from(Channel).where(Channel.status == "pending")),
-                    "messages": db.scalar(select(func.count()).select_from(Message)),
+                    "messages": db.scalar(select(func.count()).select_from(Message).where(Message.part_number == 0)),
                     "jobs": db.scalar(select(func.count()).select_from(Job))}
 
     def channel_report(self, days: int = 7) -> list[dict]:
@@ -492,7 +512,7 @@ class Repository:
                 if channel_id in report:
                     report[channel_id]["checked_at"] = checked_at
             for channel_id, count in db.execute(select(Message.channel_id, func.count())
-                                                .where(Message.published_at >= since).group_by(Message.channel_id)):
+                                                .where(Message.part_number == 0, Message.published_at >= since).group_by(Message.channel_id)):
                 if channel_id in report:
                     report[channel_id]["posts"] = count
             for channel_id, last_post in db.execute(select(Message.channel_id, func.max(Message.published_at))
@@ -540,7 +560,8 @@ class Repository:
         since = utcnow() - timedelta(hours=24)
         with self.factory() as db:
             return {
-                "messages": db.scalar(select(func.count()).select_from(Message).where(Message.discovered_at >= since)),
+                "messages": db.scalar(select(func.count()).select_from(Message)
+                                      .where(Message.part_number == 0, Message.discovered_at >= since)),
                 "notifications": db.scalar(select(func.count()).select_from(Notification).where(Notification.sent_at >= since)),
                 "last_notification": db.scalar(select(func.max(Notification.sent_at))),
             }

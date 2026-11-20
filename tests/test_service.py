@@ -3,11 +3,12 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
 import pytest
+from telethon import types
 from telethon.errors import FloodWaitError
 
 from scout.ai import DRAFT_VERSION
 from scout.bot import create_router, job_keyboard
-from scout.models import Channel, MonitoringState
+from scout.models import Channel, Message, MonitoringState
 from scout.service import DISCOVERY_GROUPS, ScoutService, discovery_fit
 from scout.telegram import chat_search_term
 
@@ -85,6 +86,58 @@ class FakeAI:
         return {"title": "Сайт", "category": "сайт", "requirements": ["страница"],
                 "budget": None, "currency": None, "deadline": None,
                 "score_reason": "выполнимо", "score": 85}
+
+
+@pytest.mark.asyncio
+async def test_digest_keeps_individual_orders_and_contacts_on_retry(repo):
+    channel = repo.candidate(100, "digest_jobs", "Jobs", "", None, 70, "", [])
+    repo.transition_channel(channel.id, "approved")
+    first = "\u200b#вебдизайнер\n🔥 Нужно сделать сайт для мастерской.\n➡️ +70000000001"
+    second = "#вебдизайнер\nНужно создать одностраничный сайт для тренера.\nНаписать"
+    unrelated = "#иллюстратор\nНужен Senior иллюстратор и сайт для агентства.\nНаписать"
+    text = "\n\n".join((first, second, unrelated))
+    link_offset = len(text[:text.index("Написать")].encode("utf-16-le")) // 2
+    unrelated_offset = len(text[:text.rindex("Написать")].encode("utf-16-le")) // 2
+    item = SimpleNamespace(id=42, raw_text=text, date=datetime.now(timezone.utc), media=None, fwd_from=None,
+                           entities=[types.MessageEntityTextUrl(link_offset, 8, "https://t.me/realclient"),
+                                     types.MessageEntityTextUrl(unrelated_offset, 8, "https://t.me/otherclient")])
+    ai = FakeAI()
+    ai.ask = AsyncMock(side_effect=ai.ask)
+    bot = SimpleNamespace(send_message=AsyncMock(return_value=SimpleNamespace(message_id=42)))
+    service = ScoutService(repo, SimpleNamespace(), ai, bot, 1)
+    service._save_item(channel, item)
+    await service.process_pending()
+    service._save_item(channel, item)
+    await service.process_pending()
+
+    assert repo.cursor(channel.id) == 42
+    assert repo.stats()["messages"] == 1
+    assert {job.contact_url for job in repo.jobs()} == {"tel:+70000000001", "https://t.me/realclient"}
+    assert {repo.job_original(job.id) for job in repo.jobs()} == {first, second}
+    assert {repo.job_link(job.id) for job in repo.jobs()} == {"https://t.me/digest_jobs/42"}
+    assert ai.ask.await_count == 4
+    assert bot.send_message.await_count == 2
+    with repo.factory() as db:
+        assert db.query(Message).filter_by(rejection_reason="requires_verified_expertise", part_number=3).count() == 1
+
+
+@pytest.mark.asyncio
+async def test_borderline_kwork_project_must_pass_ai_prefilter(repo):
+    channel = repo.candidate(100, "kwork_jobs", "Kwork", "", None, 70, "", [])
+    repo.transition_channel(channel.id, "approved")
+    text = "Доработка сервис деска на базе GLPI. Требуется настройка, интегарции и создание правил. Бюджет 10 000 рублей."
+    repo.set_setting("platform_sources_enabled", "true")
+    ai = FakeAI()
+    ai.ask = AsyncMock(return_value={"is_job": True, "is_it": True, "codex_feasible": False})
+    bot = SimpleNamespace(send_message=AsyncMock())
+    service = ScoutService(repo, SimpleNamespace(), ai, bot, 1)
+    found = repo.save_message(channel.id, 41, text, "https://kwork.ru/projects/1234/view", datetime.now(timezone.utc),
+                              {"outbound_links": [{"url": "https://kwork.ru/projects/1234/view"}]})
+    await service.process_pending()
+    ai.ask.assert_awaited_once_with("kwork_prefilter", text)
+    bot.send_message.assert_not_awaited()
+    with repo.factory() as db:
+        assert db.get(Message, found.id).rejection_reason == "ai_not_feasible"
 
 
 @pytest.mark.asyncio

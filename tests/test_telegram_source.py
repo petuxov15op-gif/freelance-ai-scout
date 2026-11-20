@@ -21,7 +21,7 @@ def test_outbound_links_reads_hidden_text_and_buttons():
                               entities=[types.MessageEntityTextUrl(offset=3, length=6, url="https://fl.ru/projects/1")],
                               buttons=[[SimpleNamespace(text="Написать", url="https://t.me/client12345")]])
     assert outbound_links(message) == [
-        {"label": "Заявка", "url": "https://fl.ru/projects/1"},
+        {"label": "Заявка", "url": "https://fl.ru/projects/1", "offset": 3, "length": 6},
         {"label": "Написать", "url": "https://t.me/client12345"},
     ]
 

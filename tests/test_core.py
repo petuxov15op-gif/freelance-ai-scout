@@ -1,9 +1,16 @@
 import pytest
 
 from scout.ai import validate_response
-from scout.core import (beginner_ai_role, calculate_score, explicit_ai_coding, explicit_it_task, likely_job, normalize_link,
+from scout.core import (announcement_parts, beginner_ai_role, calculate_score, explicit_ai_coding, explicit_it_task, likely_job, normalize_link,
                         has_direct_contact_link, kwork_excluded, kwork_project_url, mentions_platform,
                         ongoing_role, potential_job, similar, text_hash)
+
+
+def test_numbered_checklist_is_not_split_as_a_digest():
+    text = "Нужен сайт.\n\n1. Нужен раздел услуг и контактов.\n\n2. Нужна форма записи на главной."
+    assert announcement_parts(text) == [(text, [])]
+    orders = ["1. Нужен сайт для архитектурного бюро.", "2. Нужен бот для записи в студию."]
+    assert [part for part, _ in announcement_parts("Свежие заказы:\n" + "\n\n".join(orders))] == orders
 
 
 def test_beginner_ai_role_needs_both_ai_role_and_entry_signal():
