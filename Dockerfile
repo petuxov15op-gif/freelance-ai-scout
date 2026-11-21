@@ -1,4 +1,7 @@
 FROM python:3.12-slim
+ARG SCOUT_SOURCE_REVISION=unknown
+LABEL org.opencontainers.image.title="Freelance AI Scout" \
+      org.opencontainers.image.revision=$SCOUT_SOURCE_REVISION
 WORKDIR /app
 ENV PYTHONDONTWRITEBYTECODE=1 PYTHONUNBUFFERED=1
 COPY pyproject.toml ./

@@ -1,6 +1,9 @@
 services:
   scout:
-    build: .
+    build:
+      context: .
+      args:
+        SCOUT_SOURCE_REVISION: ${SCOUT_SOURCE_REVISION:-unknown}
     env_file: .env
     environment:
       SESSION_PATH: /app/data/telegram_user
