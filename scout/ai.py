@@ -264,6 +264,7 @@ class OpenRouter:
                 "\nВерни только один JSON-объект по указанной схеме. "
                 "Без Markdown, пояснений и другого текста. Схема: " + schema
             )
+            payload["messages"][1]["content"] += "\nОтветь только JSON-объектом по системной схеме."
         async with self.semaphore:
             if self.provider == "openrouter" and self.repo.cost_today() >= self.daily_limit:
                 self.last_status = "дневной лимит достигнут"
@@ -276,7 +277,23 @@ class OpenRouter:
                     response.raise_for_status()
                     body = response.json()
                     raw = body["choices"][0]["message"]["content"]
-                    data = validate_response(json.loads(raw), kind)
+                    if self.provider == "compatible" and isinstance(raw, str):
+                        fenced = re.fullmatch(
+                            r"\s*```(?:json)?\s*(.*?)\s*```\s*", raw, re.IGNORECASE | re.DOTALL
+                        )
+                        if fenced:
+                            raw = fenced.group(1)
+                    try:
+                        parsed = json.loads(raw)
+                    except json.JSONDecodeError:
+                        if self.provider != "compatible" or attempt != 0:
+                            raise
+                        payload["messages"].append({
+                            "role": "user",
+                            "content": "Повтори ответ. Нужен ровно один JSON-объект, начиная с {, без обычного текста.",
+                        })
+                        continue
+                    data = validate_response(parsed, kind)
                     self.repo.record_usage(payload["model"], kind, body.get("usage") or {})
                     if kind == "draft" and data["case_id"] not in {None, *draft_cases}:
                         raise ValueError("Черновик с неподходящим проектом")

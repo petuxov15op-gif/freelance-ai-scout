@@ -279,7 +279,11 @@ async def test_health_check_does_not_call_model_after_key_limit(repo):
 
 @pytest.mark.asyncio
 async def test_alternate_provider_keeps_openrouter_fields_out(repo):
+    calls = 0
+
     def respond(request):
+        nonlocal calls
+        calls += 1
         assert request.url.host == "example.test"
         assert request.url.path == "/v1/chat/completions"
         payload = json.loads(request.content)
@@ -289,7 +293,13 @@ async def test_alternate_provider_keeps_openrouter_fields_out(repo):
         instructions, schema = payload["messages"][0]["content"].rsplit("Схема: ", 1)
         assert "Верни только один JSON-объект" in instructions
         assert json.loads(schema) == payload["response_format"]["json_schema"]["schema"]
-        return httpx.Response(200, json={"choices": [{"message": {"content": '{"suitable": true, "reason": "да"}'}}]})
+        assert payload["messages"][1]["content"].endswith("Ответь только JSON-объектом по системной схеме.")
+        if calls == 1:
+            content = "Подходящий заказ."
+        else:
+            assert "Повтори ответ" in payload["messages"][-1]["content"]
+            content = '```json\n{"suitable": true, "reason": "да"}\n```'
+        return httpx.Response(200, json={"choices": [{"message": {"content": content}}]})
 
     ai = OpenRouter("alternate-key", "claude-opus-5-5", repo, 1,
                     provider="compatible", base_url="https://example.test/v1")
@@ -297,5 +307,6 @@ async def test_alternate_provider_keeps_openrouter_fields_out(repo):
     ai.client = httpx.AsyncClient(transport=httpx.MockTransport(respond), base_url="https://example.test/v1")
     try:
         assert (await ai.ask("candidate", "Нужен бот"))["suitable"]
+        assert calls == 2
     finally:
         await ai.close()
