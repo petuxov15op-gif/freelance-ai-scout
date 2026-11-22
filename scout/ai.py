@@ -258,6 +258,12 @@ class OpenRouter:
         if self.provider == "compatible":
             payload.pop("provider")
             payload.pop("usage")
+            # Some compatible APIs accept response_format without enforcing it.
+            schema = json.dumps(schemas[kind], ensure_ascii=False, separators=(",", ":"))
+            payload["messages"][0]["content"] += (
+                "\nВерни только один JSON-объект по указанной схеме. "
+                "Без Markdown, пояснений и другого текста. Схема: " + schema
+            )
         async with self.semaphore:
             if self.provider == "openrouter" and self.repo.cost_today() >= self.daily_limit:
                 self.last_status = "дневной лимит достигнут"

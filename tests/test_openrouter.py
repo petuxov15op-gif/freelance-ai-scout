@@ -286,6 +286,9 @@ async def test_alternate_provider_keeps_openrouter_fields_out(repo):
         assert payload["model"] == "claude-opus-5-5"
         assert payload["response_format"]["type"] == "json_schema"
         assert "provider" not in payload and "usage" not in payload
+        instructions, schema = payload["messages"][0]["content"].rsplit("Схема: ", 1)
+        assert "Верни только один JSON-объект" in instructions
+        assert json.loads(schema) == payload["response_format"]["json_schema"]["schema"]
         return httpx.Response(200, json={"choices": [{"message": {"content": '{"suitable": true, "reason": "да"}'}}]})
 
     ai = OpenRouter("alternate-key", "claude-opus-5-5", repo, 1,
