@@ -13,14 +13,14 @@ from aiogram.types import (BotCommand, CallbackQuery, InlineKeyboardButton, Inli
 
 from .service import DISCOVERY_GROUPS, EMPLOYMENT_LABELS, JOB_STATUS_LABELS
 from .telegram import parse_public_channel
-from .cards import OrderCards, card_keyboard
+from .cards import NO_PREVIEW, OrderCards, card_keyboard
 
 log = logging.getLogger(__name__)
 
 MENU_SECTIONS = {
     "📋 Заказы": ("latest", "top", "followed"),
     "📡 Каналы": ("sources", "channelstats", "pending", "discover", "insights", "platforms"),
-    "📊 Бот": ("status", "check", "today", "stats", "analytics", "settings"),
+    "📊 Бот": ("status", "check", "today", "stats", "analytics", "outreach", "settings"),
 }
 MENU_LABELS = {
     "latest": "📋 Последние",
@@ -37,6 +37,7 @@ MENU_LABELS = {
     "today": "🔄 Проверить сегодня",
     "stats": "📈 Статистика",
     "analytics": "📊 Отклики",
+    "outreach": "✉️ Автоотклики",
     "settings": "⚙️ Настройки",
 }
 ADD_CHANNEL_LABEL = "➕ Добавить канал"
@@ -93,7 +94,7 @@ def bot_commands() -> list[BotCommand]:
         ("pending", "Каналы на подтверждении"), ("add", "Добавить канал"),
         ("latest", "Последние заказы"), ("top", "Лучшие заказы"),
         ("stats", "Статистика"), ("settings", "Настройки"),
-        ("analytics", "Аналитика откликов"),
+        ("analytics", "Аналитика откликов"), ("outreach", "Автоотклики за сегодня"),
     )]
 
 
@@ -565,6 +566,15 @@ def create_router(service) -> Router:
     async def analytics(message: Message):
         await message.answer(analytics_text(30), reply_markup=analytics_keyboard())
 
+    @router.message(Command("outreach"))
+    async def outreach(message: Message):
+        enabled = service.outreach.enabled()
+        button = InlineKeyboardButton(text="⏸ Пауза" if enabled else "▶️ Включить",
+                                      callback_data="outreach:off" if enabled else "outreach:on")
+        keyboard = InlineKeyboardMarkup(inline_keyboard=[[button]])
+        for index, page in enumerate(service.outreach.report()):
+            await message.answer(page, reply_markup=keyboard if index == 0 else None, link_preview_options=NO_PREVIEW)
+
     @router.message(Command("insights"))
     async def insights(message: Message):
         queries = sorted(repo.search_queries(), key=lambda item: (item.suitable_jobs, item.new_sources, item.applications), reverse=True)[:5]
@@ -658,7 +668,7 @@ def create_router(service) -> Router:
         handlers = {"sources": sources, "channelstats": channelstats, "pending": pending, "platforms": platforms,
                     "latest": latest, "top": top, "followed": followed,
                     "status": status, "check": check, "today": today, "discover": discover,
-                    "stats": stats, "analytics": analytics, "insights": insights, "settings": settings}
+                    "stats": stats, "analytics": analytics, "outreach": outreach, "insights": insights, "settings": settings}
         await handlers[action](message)
 
     @router.message()
@@ -691,6 +701,12 @@ def create_router(service) -> Router:
     async def callbacks(callback: CallbackQuery):
         parts = (callback.data or "").split(":")
         try:
+            if parts in (["outreach", "on"], ["outreach", "off"]):
+                service.outreach.set_enabled(parts[1] == "on")
+                await callback.answer("Настройка сохранена")
+                await callback.message.edit_reply_markup(reply_markup=None)
+                await outreach(callback.message)
+                return
             if parts[0] in {"card", "feedback", "field", "plan", "draft"}:
                 await cards.handle(callback)
                 return

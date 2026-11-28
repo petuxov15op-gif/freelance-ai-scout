@@ -10,7 +10,8 @@ from sqlalchemy.orm import sessionmaker
 from .core import kwork_project_url, normalize_link, similar, text_hash
 from .db import transaction
 from .models import (AIUsage, Analysis, Channel, ChannelCandidate, Feedback, Job,
-                     JobSource, Message, MonitoringState, Notification, SearchQuery, Setting, utcnow)
+                     JobSource, Message, MonitoringState, Notification, Outreach, OutreachReply,
+                     SearchQuery, Setting, utcnow)
 
 
 class Repository:
@@ -75,6 +76,10 @@ class Repository:
     def get_channel(self, channel_id: int) -> Channel | None:
         with self.factory() as db:
             return db.get(Channel, channel_id)
+
+    def approved_channel(self, telegram_id: int) -> Channel | None:
+        with self.factory() as db:
+            return db.scalar(select(Channel).where(Channel.telegram_id == telegram_id, Channel.status == "approved"))
 
     def get_candidate(self, channel_id: int) -> ChannelCandidate | None:
         with self.factory() as db:
@@ -354,24 +359,100 @@ class Repository:
 
     def add_feedback(self, job_id: int, action: str) -> None:
         with transaction(self.factory) as db:
-            db.add(Feedback(job_id=job_id, action=action))
-            job = db.get(Job, job_id)
+            self._record_feedback(db, db.get(Job, job_id), action)
+
+    def _record_feedback(self, db, job: Job, action: str, at: datetime | None = None,
+                         change_status: bool = True) -> None:
+        at = at or utcnow()
+        db.add(Feedback(job_id=job.id, action=action, created_at=at))
+        if change_status:
             job.status = action
-            first_application = action == "applied" and job.applied_at is None
-            first_reply = action == "replied" and job.replied_at is None
-            if first_application:
-                job.applied_at = utcnow()
-            if first_reply:
-                job.replied_at = utcnow()
-            candidate = db.scalar(select(ChannelCandidate).join(Channel, Channel.id == ChannelCandidate.channel_id)
-                                  .join(Message, Message.channel_id == Channel.id)
-                                  .join(JobSource, JobSource.message_id == Message.id)
-                                  .where(JobSource.job_id == job_id, ChannelCandidate.query.is_not(None)).limit(1))
-            if candidate and (first_application or first_reply):
-                query = db.scalar(select(SearchQuery).where(SearchQuery.phrase == candidate.query))
-                if query:
-                    field = "applications" if first_application else "replies"
-                    setattr(query, field, getattr(query, field) + 1)
+        first_application = action == "applied" and job.applied_at is None
+        first_reply = action == "replied" and job.replied_at is None
+        if first_application:
+            job.applied_at = at
+        if first_reply:
+            job.replied_at = at
+        candidate = db.scalar(select(ChannelCandidate).join(Channel, Channel.id == ChannelCandidate.channel_id)
+                              .join(Message, Message.channel_id == Channel.id)
+                              .join(JobSource, JobSource.message_id == Message.id)
+                              .where(JobSource.job_id == job.id, ChannelCandidate.query.is_not(None)).limit(1))
+        if candidate and (first_application or first_reply):
+            query = db.scalar(select(SearchQuery).where(SearchQuery.phrase == candidate.query))
+            if query:
+                field = "applications" if first_application else "replies"
+                setattr(query, field, getattr(query, field) + 1)
+
+    def start_outreach(self, job_id: int, source_id: int, username: str, text: str) -> bool:
+        try:
+            with transaction(self.factory) as db:
+                job = db.get(Job, job_id)
+                if job.applied_at is not None or job.status not in {"new", "interesting"}:
+                    return False
+                db.add(Outreach(job_id=job_id, source_id=source_id, username=username, text=text))
+            return True
+        except IntegrityError:
+            return False
+
+    def has_outreach(self, job_id: int) -> bool:
+        with self.factory() as db:
+            return db.get(Outreach, job_id) is not None
+
+    def finish_outreach(self, job_id: int, peer_id: int | None, message_id: int | None = None,
+                        sent_at: datetime | None = None, problem: str | None = None) -> None:
+        with transaction(self.factory) as db:
+            row = db.get(Outreach, job_id)
+            row.peer_id, row.sent_message_id, row.sent_at, row.problem = peer_id, message_id, sent_at, problem
+            if sent_at is not None:
+                job = db.get(Job, job_id)
+                self._record_feedback(db, job, "applied", sent_at, change_status=job.status in {"new", "interesting"})
+
+    def record_outreach_reply(self, peer_id: int, message_id: int, received_at: datetime,
+                              text: str, reply_to: int | None = None) -> bool:
+        try:
+            with transaction(self.factory) as db:
+                query = select(Outreach).where(Outreach.peer_id == peer_id, Outreach.sent_at <= received_at,
+                                               Outreach.sent_message_id < message_id)
+                if reply_to is not None:
+                    query = query.where(Outreach.sent_message_id <= reply_to)
+                row = db.scalar(query.order_by(Outreach.sent_message_id.desc()).limit(1))
+                if row is None:
+                    return False
+                db.add(OutreachReply(job_id=row.job_id, peer_id=peer_id, message_id=message_id,
+                                     received_at=received_at, text=text))
+                job = db.get(Job, row.job_id)
+                if job.replied_at is None:
+                    self._record_feedback(db, job, "replied", received_at, change_status=job.status == "applied")
+            return True
+        except IntegrityError:
+            return False
+
+    def pending_outreach_replies(self) -> list[tuple[OutreachReply, str, str | None]]:
+        with self.factory() as db:
+            query = (select(OutreachReply, Outreach.username, Job.title).join(Outreach, Outreach.job_id == OutreachReply.job_id)
+                     .join(Job, Job.id == Outreach.job_id).where(OutreachReply.notified_at.is_(None))
+                     .order_by(OutreachReply.id).limit(100))
+            return [(reply, username, title) for reply, username, title in db.execute(query)]
+
+    def finish_outreach_reply(self, reply_id: int) -> None:
+        with transaction(self.factory) as db:
+            db.get(OutreachReply, reply_id).notified_at = utcnow()
+
+    def outreach_today(self, start: datetime, end: datetime) -> tuple[list, int]:
+        with self.factory() as db:
+            replies = (select(OutreachReply.job_id, func.count().label("count"))
+                       .group_by(OutreachReply.job_id).subquery())
+            rows = db.execute(
+                select(Outreach, Job.title, Message.link, func.coalesce(replies.c.count, 0))
+                .join(Job, Job.id == Outreach.job_id).join(Message, Message.id == Outreach.source_id)
+                .outerjoin(replies, replies.c.job_id == Outreach.job_id)
+                .where(func.coalesce(Outreach.sent_at, Outreach.started_at) >= start,
+                       func.coalesce(Outreach.sent_at, Outreach.started_at) < end)
+                .order_by(Outreach.started_at)
+            ).all()
+            replied = db.scalar(select(func.count()).select_from(OutreachReply).where(
+                OutreachReply.received_at >= start, OutreachReply.received_at < end))
+            return rows, replied
 
     def set_job_note(self, job_id: int, note: str) -> bool:
         with transaction(self.factory) as db:

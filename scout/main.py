@@ -44,11 +44,15 @@ async def run() -> None:
         provider=config.ai_provider, base_url=config.alternate_api_base_url,
         draft_model=config.draft_model,
     )
-    service = ScoutService(repo, source, ai, bot, config.owner_id)
+    service = ScoutService(repo, source, ai, bot, config.owner_id, config.outreach_portfolio_urls)
     dispatcher = Dispatcher()
     dispatcher.include_router(create_router(service))
     scheduler = AsyncIOScheduler(timezone=ZoneInfo("Asia/Yekaterinburg"))
     scheduler.add_job(service.monitor_due, "interval", minutes=1, id="monitor", max_instances=1, coalesce=True)
+    scheduler.add_job(service.outreach.notify_replies, "interval", seconds=30, id="outreach_replies",
+                      max_instances=1, coalesce=True)
+    scheduler.add_job(service.outreach.daily_report, "cron", hour=21, minute=0, id="outreach_report",
+                      misfire_grace_time=3600)
     initial_monitor = None
     priority_task = None
     discovery_task = None
@@ -57,11 +61,25 @@ async def run() -> None:
     service.source_ready = False
     service.source_error = "Подключаем чтение Telegram"
     priority_wakeup = asyncio.Event()
+    updated_channels: set[int] = set()
+
+    async def on_channel_update(event) -> None:
+        peer = event.message.peer_id
+        if isinstance(peer, types.PeerChannel):
+            channel = repo.approved_channel(peer.channel_id)
+            if channel and ((channel.username or "").lower() == PRIORITY_CHANNEL or service.outreach.enabled()):
+                updated_channels.add(channel.id)
+                priority_wakeup.set()
+
+    source.client.add_event_handler(on_channel_update, events.NewMessage(incoming=True))
+    source.client.add_event_handler(service.outreach.on_reply, events.NewMessage(incoming=True))
 
     async def priority_loop() -> None:
         while True:
             priority_wakeup.clear()
-            await service.monitor_priority()
+            affected = updated_channels.copy()
+            updated_channels.clear()
+            await service.monitor_priority(affected)
             try:
                 await asyncio.wait_for(priority_wakeup.wait(), timeout=30)
             except asyncio.TimeoutError:
@@ -95,17 +113,9 @@ async def run() -> None:
                 await asyncio.sleep(60)
         service.source_ready = True
         service.source_error = ""
-        priority_channel = next((channel for channel in repo.monitored_channels()
-                                 if (channel.username or "").lower() == PRIORITY_CHANNEL), None)
-        if priority_channel:
-            async def on_priority_update(event):
-                peer = getattr(event.message, "peer_id", None)
-                if isinstance(peer, types.PeerChannel) and peer.channel_id == priority_channel.telegram_id:
-                    priority_wakeup.set()
-
-            source.client.add_event_handler(on_priority_update, events.NewMessage())
-            priority_task = asyncio.create_task(priority_loop())
-            logging.info("Приоритетный канал @%s: новые сообщения сразу, повторная проверка каждые 30 секунд", PRIORITY_CHANNEL)
+        priority_task = asyncio.create_task(priority_loop())
+        await source.client.catch_up()
+        logging.info("Включено чтение обновлений Telegram и быстрая проверка @%s", PRIORITY_CHANNEL)
         scheduler.start()
         initial_monitor = asyncio.create_task(service.monitor())
         if config.discovery_enabled:

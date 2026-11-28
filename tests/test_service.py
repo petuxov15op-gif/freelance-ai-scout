@@ -8,7 +8,10 @@ from telethon.errors import FloodWaitError
 
 from scout.ai import DRAFT_VERSION
 from scout.bot import create_router, job_keyboard
+from scout.core import contact_options
 from scout.models import Channel, Message, MonitoringState
+from scout.outreach import outreach_username
+from scout.portfolio import CASES
 from scout.service import DISCOVERY_GROUPS, ScoutService, discovery_fit
 from scout.telegram import chat_search_term
 
@@ -417,6 +420,73 @@ async def test_priority_order_has_fallback_reply_when_generation_fails(repo):
     bot.send_message.assert_awaited_once()
     assert "Готовый отклик" in bot.send_message.await_args.args[1]
     assert "материалы по задаче" in bot.send_message.await_args.args[1]
+
+
+@pytest.mark.parametrize(("body", "links", "expected"), [
+    ("Пишите @client12345", [], "client12345"),
+    ("Контакты: @client12345 и @other54321", [], None),
+    ("Контакты: @first_last_12", [], None),
+    ("Платный отклик. Пишите @client12345", [], None),
+    ("В личку не пишите @client12345", [], None),
+    ("Написать", [{"label": "Написать", "url": "https://t.me/client12345"}], "client12345"),
+    ("Форма отклика", [{"label": "Отклик", "url": "https://t.me/client12345?start=123"}], None),
+    ("Отклик на work@example.org", [], None),
+])
+def test_outreach_only_uses_unambiguous_personal_contact(body, links, expected):
+    channel = SimpleNamespace(username="job_feed")
+    message = SimpleNamespace(text=body, metadata_json={"outbound_links": links})
+    contact = contact_options(body, links, channel.username)
+    assert outreach_username(message, channel, contact) == expected
+
+
+@pytest.mark.asyncio
+async def test_auto_application_reply_and_report(repo):
+    channel = repo.candidate(100, "job_feed", "Jobs", "", None, 70, "", [])
+    repo.transition_channel(channel.id, "approved")
+    now = datetime.now(timezone.utc)
+    source = SimpleNamespace(outreach_recipient=AsyncMock(return_value=SimpleNamespace(id=555)),
+                             send_outreach=AsyncMock(return_value=SimpleNamespace(id=80, date=now)))
+    bot = SimpleNamespace(send_message=AsyncMock(return_value=SimpleNamespace(message_id=42)))
+
+    class ReplyAI(FakeAI):
+        async def ask(self, kind, text):
+            if kind == "draft":
+                return {"draft": "Здравствуйте! Сверстаю сайт для кафе. Пришлёте макет?",
+                        "case_id": None, "draft_version": DRAFT_VERSION}
+            return await super().ask(kind, text)
+
+    service = ScoutService(repo, source, ReplyAI(), bot, 1)
+    service.outreach.set_enabled(True)
+    old = now - timedelta(hours=1)
+    published = datetime.now(timezone.utc)
+    body = "Нужен лендинг для кафе. Контакт для отклика: @client12345"
+    for number, text, date in ((1, "Нужен сайт для врача. Контакт: @doctor1234", old),
+                               (2, body, published), (3, body, published)):
+        item = SimpleNamespace(id=number, raw_text=text, date=date, media=None, fwd_from=None)
+        service._save_item(channel, item)
+    await service.process_pending()
+    await service.process_pending()
+    source.outreach_recipient.assert_awaited_once_with("client12345")
+    source.send_outreach.assert_awaited_once()
+    sent = source.send_outreach.await_args.args[1]
+    assert sent.startswith("Здравствуйте!")
+    assert all(sent.count(case["url"]) == 1 for case in CASES.values())
+    job = next(job for job in repo.jobs() if job.status == "applied")
+
+    reply = SimpleNamespace(id=81, date=now + timedelta(seconds=1), raw_text="Вот макет", reply_to_msg_id=80)
+    await service.outreach.on_reply(SimpleNamespace(is_private=True, sender_id=999, message=reply))
+    assert repo.job(job.id).status == "applied"
+    event = SimpleNamespace(is_private=True, sender_id=555, message=reply)
+    await service.outreach.on_reply(event)
+    await service.outreach.on_reply(event)
+    assert repo.job(job.id).status == "replied"
+    sent_notifications = [call.args[1] for call in bot.send_message.await_args_list if "Вот макет" in call.args[1]]
+    assert len(sent_notifications) == 1
+    assert "@client12345" in sent_notifications[0]
+    report = service.outreach.report(now + timedelta(seconds=1))[0]
+    assert "Отправлено 1 · ответов получено 1" in report
+    assert "@client12345" in report and "https://t.me/job_feed/2" in report
+    assert "@doctor1234" not in report
 
 
 @pytest.mark.asyncio

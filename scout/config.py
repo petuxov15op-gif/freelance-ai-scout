@@ -42,6 +42,7 @@ class Config:
     miniapp_url: str = ""
     miniapp_host: str = "127.0.0.1"
     miniapp_port: int = 8080
+    outreach_portfolio_urls: tuple[str, ...] = ()
 
     @classmethod
     def from_env(cls) -> "Config":
@@ -67,6 +68,14 @@ class Config:
         miniapp_port = int(os.getenv("MINIAPP_PORT", "8080"))
         if not 1 <= miniapp_port <= 65535:
             raise ValueError("MINIAPP_PORT должен быть от 1 до 65535")
+        portfolio_urls = tuple(dict.fromkeys(os.getenv("OUTREACH_PORTFOLIO_URLS", "").split()))
+        for url in portfolio_urls:
+            address = urlsplit(url)
+            if (address.scheme != "https" or not address.hostname or address.username or address.password
+                    or len(url) > 300):
+                raise ValueError("OUTREACH_PORTFOLIO_URLS должен содержать публичные HTTPS-ссылки")
+        if len(portfolio_urls) > 5:
+            raise ValueError("OUTREACH_PORTFOLIO_URLS: максимум пять ссылок")
         return cls(
             ai_provider=provider,
             alternate_api_key=os.getenv("ALTERNATE_API_KEY", ""),
@@ -91,4 +100,5 @@ class Config:
             miniapp_url=miniapp_url,
             miniapp_host=os.getenv("MINIAPP_HOST", "127.0.0.1"),
             miniapp_port=miniapp_port,
+            outreach_portfolio_urls=portfolio_urls,
         )

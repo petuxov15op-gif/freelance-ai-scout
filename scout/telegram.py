@@ -84,6 +84,16 @@ class TelegramSource:
             raise ValueError("Доступен только публичный Telegram-канал или чат")
         return entity
 
+    async def outreach_recipient(self, username: str) -> types.User:
+        await self.ensure_connected()
+        entity = await self.client.get_entity("@" + username)
+        if not isinstance(entity, types.User) or entity.bot or entity.deleted or entity.is_self:
+            raise ValueError("Контакт не является личным аккаунтом заказчика")
+        return entity
+
+    async def send_outreach(self, recipient: types.User, text: str):
+        return await self.client.send_message(recipient, text, parse_mode=None, link_preview=False)
+
     async def search_public_chats(self, query: str, limit: int = 30):
         await self.ensure_connected()
         result = await self.client(functions.contacts.SearchRequest(q=query, limit=limit))

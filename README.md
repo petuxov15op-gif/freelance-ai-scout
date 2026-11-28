@@ -2,7 +2,7 @@
 
 ![Freelance AI Scout cover](portfolio/ai-scout-cover.jpg)
 
-A personal Telegram bot that monitors owner-approved channels for relevant freelance software projects and AI-assisted development roles. It filters posts, explains why an opportunity fits, and sends candidates to the owner. It can draft a reply, but never contacts clients on its own.
+A personal Telegram bot that monitors owner-approved channels for relevant freelance software projects and AI-assisted development roles. It filters posts, explains why an opportunity fits, and sends candidates to the owner. It can draft replies or send first applications automatically when the owner enables outreach.
 
 ## What it does
 
@@ -15,7 +15,7 @@ A personal Telegram bot that monitors owner-approved channels for relevant freel
 - Groups reposts when the contact or source supports the match, tracks rejection reasons and manual application statuses, shows 7-day, 30-day, and all-time analytics, and prepares reply drafts for owner review.
 - Sends native interactive order cards with follow/unfollow, reply draft, analysis, source, rejection, status, note, and price actions. Analysis and drafts open in the same message; choices and edited drafts persist in SQLite. No Mini App, domain, or tunnel is required for these cards.
 
-The bot does not join channels on its own or send applications to clients.
+**Bot → Auto applications** shows the day's recipients, sent applications and incoming replies. Enable it there to contact a single listed personal Telegram account per new eligible job using the Telegram user session. The application includes the verified portfolio links. The bot alerts the owner when a tracked client replies and sends a daily report at 21:00 Yekaterinburg time. Set `OUTREACH_PORTFOLIO_URLS` to space-separated public HTTPS links to override the default portfolio.
 
 ## Stack
 
@@ -78,7 +78,7 @@ The named `scout_data` volume holds the SQLite database and Telegram session. Pr
 
 ## Using the bot
 
-Send `/start` to show the bottom menu. Tap a section to switch the keyboard to its actions; use **Back** to return. **Jobs → Following** opens saved orders; following is independent of the application status. **Latest** and **Best** show buttons that open each order's card. In a card, **Reply** prepares and saves a draft, **Analysis** opens the plan, and **Back to order** restores the main buttons. **Note / price** and **Edit reply** ask for text in the chat and update the original card; **Cancel input** leaves the saved value unchanged. Drafts are never sent to clients. **Channels → By channel** shows seven-day post, alert, and response counts, check times, and the current polling interval for every source. **Channels** also includes **Find chats now** and **Search performance**. **Bot → Settings** toggles employment categories and search groups; **Bot → Applications** shows analytics. To add a channel, send a public `@username` or `t.me` link and confirm **Add** on its card. Commands include `/status`, `/sources`, `/channelstats`, `/pending`, `/latest`, `/top`, `/stats`, `/analytics`, `/settings`, and `/add`.
+Send `/start` to show the bottom menu. Tap a section to switch the keyboard to its actions; use **Back** to return. **Jobs → Following** opens saved orders; following is independent of the application status. **Latest** and **Best** show buttons that open each order's card. In a card, **Reply** prepares and saves a draft, **Analysis** opens the plan, and **Back to order** restores the main buttons. **Note / price** and **Edit reply** ask for text in the chat and update the original card; **Cancel input** leaves the saved value unchanged. **Channels → By channel** shows seven-day post, alert, and response counts, check times, and the current polling interval for every source. **Channels** also includes **Find chats now** and **Search performance**. **Bot → Settings** toggles employment categories and search groups; **Bot → Applications** shows analytics. To add a channel, send a public `@username` or `t.me` link and confirm **Add** on its card. Commands include `/status`, `/sources`, `/channelstats`, `/pending`, `/latest`, `/top`, `/stats`, `/analytics`, `/outreach`, `/settings`, and `/add`.
 
 ## Mini App interface preview
 

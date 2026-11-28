@@ -16,6 +16,7 @@ from .core import (announcement_parts, beginner_ai_role, borderline_it_order, cl
                    kwork_excluded, kwork_project_url, office_required,
                    likely_job, mentions_platform, ongoing_role, potential_job, similar)
 from .models import Channel, Message
+from .outreach import OutreachService
 from .repository import Repository
 from .telegram import chat_search_term
 
@@ -100,8 +101,10 @@ def job_text(job, analysis, link: str | None) -> str:
 
 
 class ScoutService:
-    def __init__(self, repo: Repository, source, ai, bot: Bot, owner_id: int):
+    def __init__(self, repo: Repository, source, ai, bot: Bot, owner_id: int,
+                 portfolio_urls: tuple[str, ...] = ()):
         self.repo, self.source, self.ai, self.bot, self.owner_id = repo, source, ai, bot, owner_id
+        self.outreach = OutreachService(repo, source, bot, owner_id, portfolio_urls)
         self.monitor_lock = asyncio.Lock()
         self.discovery_lock = asyncio.Lock()
         self.last_monitor_started: datetime | None = None
@@ -425,7 +428,7 @@ class ScoutService:
         channel = row["channel"]
         if (channel.username or "").lower() == PRIORITY_CHANNEL:
             return .5
-        if self.kwork_source(channel) or row["positive_30d"] or row["saved"]:
+        if self.outreach.enabled() or self.kwork_source(channel) or row["positive_30d"] or row["saved"]:
             return 2
         if row["alerts"] > row["rejected"]:
             return 5
@@ -438,22 +441,23 @@ class ScoutService:
     async def monitor_due(self) -> None:
         await self.monitor(due_only=True)
 
-    async def monitor_priority(self) -> None:
+    async def monitor_priority(self, updated_channels: set[int] | None = None) -> None:
         if self.repo.setting("monitoring_paused", "false") == "true":
             return
         async with self.monitor_lock:
-            channel = next((item for item in self.repo.list_channels("approved")
-                            if (item.username or "").lower() == PRIORITY_CHANNEL), None)
-            if channel is None or self.source_paused(channel):
-                return
-            try:
-                async for item in self.source.messages(channel, self.repo.cursor(channel.id)):
-                    self._save_item(channel, item)
+            updated_channels = updated_channels or set()
+            for channel in self.repo.list_channels("approved"):
+                urgent = (channel.username or "").lower() == PRIORITY_CHANNEL or channel.id in updated_channels
+                if not urgent or self.source_paused(channel):
+                    continue
+                try:
+                    async for item in self.source.messages(channel, self.repo.cursor(channel.id)):
+                        self._save_item(channel, item)
+                        await self.process_pending(channel_id=channel.id)
+                    self.repo.mark_channel_checked(channel.id)
                     await self.process_pending(channel_id=channel.id)
-                self.repo.mark_channel_checked(channel.id)
-                await self.process_pending(channel_id=channel.id)
-            except Exception:
-                log.exception("Быстрая проверка @%s прервана; повторим позже", PRIORITY_CHANNEL)
+                except Exception:
+                    log.exception("Быстрая проверка канала %s прервана; повторим позже", channel.id)
 
     async def monitor(self, kwork_only: bool = False, due_only: bool = False) -> None:
         if self.repo.setting("monitoring_paused", "false") == "true":
@@ -599,6 +603,15 @@ class ScoutService:
                 existing = self.repo.matching_job(message)
                 if existing and self.repo.analysis(existing.id):
                     self.repo.attach_job(message)
+                    if (existing.applied_at is None and existing.status in {"new", "interesting"}
+                            and self.outreach.target(channel, message, contact)
+                            and not self.repo.has_outreach(existing.id)):
+                        try:
+                            redraft = await self.ai.ask("draft", message.text)
+                            await self.outreach.apply(existing.id, channel, message, contact, redraft)
+                        except Exception:
+                            log.exception("Не удалось подготовить автоотклик по заказу %s", existing.id)
+                            continue
                     if existing.contact_status not in {"direct_free", "platform_free"} and contact["status"] in {"direct_free", "platform_free"}:
                         self.repo.set_job_details(existing.id, employment, contact)
                         await self.notify_job(existing.id, "instant")
@@ -617,7 +630,8 @@ class ScoutService:
                 if not created and self.repo.analysis(job.id):
                     self.repo.mark_message(message.id, "linked")
                     continue
-                prepare_draft = priority and contact["status"] in {"direct_free", "platform_free"}
+                auto_reply = self.outreach.target(channel, message, contact)
+                prepare_draft = auto_reply or (priority and contact["status"] in {"direct_free", "platform_free"})
                 if prepare_draft:
                     deep, draft = await asyncio.gather(self.ai.ask("deep", message.text),
                                                        self.ai.ask("draft", message.text), return_exceptions=True)
@@ -628,14 +642,17 @@ class ScoutService:
                 self.repo.save_analysis(job.id, "deep", self.ai.model, deep)
                 if prepare_draft and isinstance(draft, dict) and isinstance(draft.get("draft"), str) and draft["draft"].strip():
                     self.repo.save_analysis(job.id, "draft_saved", "owner", draft)
-                elif prepare_draft:
+                elif priority and prepare_draft:
                     log.warning("Отклик для заказа %s не подготовлен ИИ; используем короткий запасной вариант", job.id)
                     self.repo.save_analysis(job.id, "draft_saved", "owner", {"draft": FALLBACK_DRAFT})
                 self.repo.set_job_details(job.id, employment, contact)
+                if auto_reply and not isinstance(draft, Exception):
+                    await self.outreach.apply(job.id, channel, message, contact, draft)
                 candidate = self.repo.get_candidate(message.channel_id)
                 if candidate and candidate.query:
                     self.repo.record_search(candidate.query, suitable_jobs=1)
-                self.repo.mark_message(message.id, "linked")
+                if not (auto_reply and isinstance(draft, Exception)):
+                    self.repo.mark_message(message.id, "linked")
                 await self.notify_job(job.id, "instant")
             except Exception as exc:
                 self.last_monitor_errors.append(f"Обработка объявления: {type(exc).__name__}")

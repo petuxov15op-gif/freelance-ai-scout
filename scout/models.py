@@ -96,6 +96,31 @@ class JobSource(Base):
     message_id: Mapped[int] = mapped_column(ForeignKey("messages.id"), unique=True)
 
 
+class Outreach(Base):
+    __tablename__ = "outreach"
+    job_id: Mapped[int] = mapped_column(ForeignKey("jobs.id"), primary_key=True, autoincrement=False)
+    source_id: Mapped[int] = mapped_column(ForeignKey("messages.id"))
+    username: Mapped[str] = mapped_column(String(32))
+    peer_id: Mapped[int | None] = mapped_column(Integer, index=True)
+    text: Mapped[str] = mapped_column(Text)
+    started_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, index=True)
+    sent_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    sent_message_id: Mapped[int | None] = mapped_column(Integer)
+    problem: Mapped[str | None] = mapped_column(String(100))
+
+
+class OutreachReply(Base):
+    __tablename__ = "outreach_replies"
+    id: Mapped[int] = mapped_column(primary_key=True)
+    job_id: Mapped[int] = mapped_column(ForeignKey("outreach.job_id"), index=True)
+    peer_id: Mapped[int] = mapped_column(Integer)
+    message_id: Mapped[int] = mapped_column(Integer)
+    received_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
+    text: Mapped[str] = mapped_column(Text)
+    notified_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    __table_args__ = (UniqueConstraint("peer_id", "message_id"),)
+
+
 class Analysis(Base):
     __tablename__ = "analyses"
     id: Mapped[int] = mapped_column(primary_key=True)
